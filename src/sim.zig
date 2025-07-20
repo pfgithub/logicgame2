@@ -26,15 +26,18 @@ const Component = struct {
         this.active_instruction = 0;
         for (owner_inputs, this.inputs) |oi, ti| this.wire_states[ti] = owner_states[oi];
 
-        switch (this.instructions[this.active_instruction]) {
-            .call => |c| c.component.simulate(this.wire_states, c.args, c.ret),
-            .transistor_64 => |t| {
-                // (pwr, cond) => (cond ? 0 : pwr)
-                // a1: pwr, a2: cond, a3: output
-                // pwr & ~cond
-
-                this.wire_states[t.a3] = this.wire_states[t.a1] & ~this.wire_states[t.a2];
-            },
+        while (this.active_instruction < this.instructions.len) {
+            switch (this.instructions[this.active_instruction]) {
+                .call => |c| c.component.simulate(this.wire_states, c.args, c.ret),
+                .transistor_1_64 => |t| {
+                    const a: u64 = if (this.wire_states[t.a] & 1 == 1) std.math.maxInt(u64) else 0;
+                    this.wire_states[t.c] = a & ~this.wire_states[t.b];
+                },
+                .transistor_64_64 => |t| this.wire_states[t.c] = this.wire_states[t.a] & ~this.wire_states[t.b],
+                .and_64 => |t| this.wire_states[t.c] = this.wire_states[t.a] & this.wire_states[t.b],
+                else => @panic(@tagName(this.instructions[this.active_instruction])),
+            }
+            this.active_instruction += 1;
         }
 
         for (owner_outputs, this.outputs) |oi, ti| this.wire_states[ti] = owner_states[oi];
@@ -43,9 +46,9 @@ const Component = struct {
 
 const SimulationInstruction = union(enum) {
     call: CallArgs,
-    transistor_64: Basic,
-    not_64: Basic,
-    and_64: Basic,
+    transistor_64_1: Basic, // a1: pwr, b64: cond, c64: output
+    transistor_64_64: Basic, // a64: pwr, b64: cond, c64: output
+    and_64: Basic, // a64: lhs, b64: rhs => c64: out
     or_64: Basic,
     xor_64: Basic,
     add_1: Basic,
@@ -58,11 +61,11 @@ const SimulationInstruction = union(enum) {
 };
 
 const Basic = struct {
-    a1: usize,
-    a2: usize,
-    a3: usize,
-    a4: usize,
-    a5: usize,
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+    e: usize,
 };
 
 const CallArgs = struct {
