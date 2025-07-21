@@ -33,7 +33,7 @@ const Parser = struct {
     const ParserComponent = struct {
         loc: Srcloc,
         name: []const u8,
-        wire_states: std.StringArrayHashMapUnmanaged(void) = .empty,
+        wire_states: std.StringArrayHashMapUnmanaged(Srcloc) = .empty,
         instructions: std.ArrayListUnmanaged(SimulationInstruction) = .empty,
         inputs: std.ArrayListUnmanaged(Wire) = .empty,
         arena: std.mem.Allocator,
@@ -41,11 +41,11 @@ const Parser = struct {
         fn getWireState(component: *ParserComponent, parser: *Parser, loc: Srcloc, label: []const u8, mode: enum { any, get, add }) !Wire {
             const gpres = try component.wire_states.getOrPut(component.arena, label);
             if (gpres.found_existing) {
-                if (mode == .add) return parser.err(loc, "wire state already defined");
+                if (mode == .add) return parser.err(loc, "wire state `{s}` already defined\nnote: src/example.lg:{d}: previous definition here", .{ label, gpres.value_ptr.* });
                 return gpres.index;
             }
-            if (mode == .get) return parser.err(loc, "wire state not defined");
-            gpres.value_ptr.* = {};
+            if (mode == .get) return parser.err(loc, "wire state `{s}` not defined", .{label});
+            gpres.value_ptr.* = loc;
             return gpres.index;
         }
     };
@@ -54,7 +54,7 @@ const Parser = struct {
         const gpres = try parser.components.getOrPut(parser.arena, label);
         if (gpres.found_existing) {
             if (gpres.value_ptr.*.*.expected_inputs != expected_inputs or gpres.value_ptr.*.*.expected_outputs != expected_outputs) {
-                return parser.err(loc, "Mismatched args counts (note: previous here <gpres.value_ptr.*.*.loc>)");
+                return parser.err(loc, "mismatched args counts\nnote: src/example.lg:{d}: previous here", .{gpres.value_ptr.*.*.loc});
             }
             return gpres.value_ptr.*;
         }
@@ -69,8 +69,8 @@ const Parser = struct {
         return gpres.value_ptr.*;
     }
 
-    fn err(parser: *Parser, loc: Srcloc, msg: []const u8) error{ParseError} {
-        std.log.err("example.lg:{d}: error: {s}", .{ loc, msg });
+    fn err(parser: *Parser, loc: Srcloc, comptime fmt: []const u8, arg: anytype) error{ParseError} {
+        std.log.err("src/example.lg:{d}: " ++ fmt, .{loc} ++ arg);
         parser.has_errors = true;
         return error.ParseError;
     }
@@ -80,12 +80,14 @@ const Parser = struct {
         if (trimmed.len == 0) return;
 
         var space_iter = std.mem.tokenizeScalar(u8, trimmed, ' ');
-        const instruction = space_iter.next() orelse return parser.err(loc, "empty line");
+        const instruction = space_iter.next() orelse return parser.err(loc, "empty line", .{});
         if (std.mem.eql(u8, instruction, "DEFINE")) {
-            if (parser.active_component != null) return parser.err(loc, "DEFINE while active component extant");
-            const name = space_iter.next() orelse return parser.err(loc, "missing DEFINE name");
-            const arrow = space_iter.next() orelse return parser.err(loc, "missing DEFINE arrow");
-            if (!std.mem.eql(u8, arrow, "->")) return parser.err(loc, "bad arrow");
+            if (parser.active_component != null) {
+                return parser.err(loc, "DEFINE while active component extant\nnote: src/example.lg:{d}: current definition here", .{parser.active_component.?.loc});
+            }
+            const name = space_iter.next() orelse return parser.err(loc, "missing DEFINE name", .{});
+            const arrow = space_iter.next() orelse return parser.err(loc, "missing DEFINE arrow", .{});
+            if (!std.mem.eql(u8, arrow, "->")) return parser.err(loc, "bad arrow", .{});
 
             parser.active_component = .{
                 .loc = loc,
@@ -97,14 +99,16 @@ const Parser = struct {
             while (space_iter.next()) |item| {
                 try component.inputs.append(parser.arena, try component.getWireState(parser, loc, item, .add));
             }
+            return;
         }
-        if (parser.active_component == null) return parser.err(loc, "missing active component");
+        if (parser.active_component == null) return parser.err(loc, "missing active component", .{});
         var component = parser.active_component.?;
 
         if (std.mem.eql(u8, instruction, "OUTPUT")) {
+            defer parser.active_component = null; // end component regardless of if we succeeded or not
             var outputs = std.ArrayListUnmanaged(Wire).empty;
             while (space_iter.next()) |item| {
-                try outputs.append(parser.arena, try parser.active_component.?.getWireState(parser, loc, item, .add));
+                try outputs.append(parser.arena, try parser.active_component.?.getWireState(parser, loc, item, .get));
             }
 
             const wire_states = try parser.arena.alloc(u64, component.wire_states.count());
@@ -113,7 +117,7 @@ const Parser = struct {
             @memset(default_outputs, 0);
 
             const final = try parser.getComponent(loc, component.name, component.inputs.items.len, outputs.items.len);
-            if (final.written) return parser.err(loc, "duplicate component definition `component.name` (note: first definition at final.loc)");
+            if (final.written) return parser.err(loc, "duplicate component definition `{s}`\nnote: src/example.lg:{d}: previous definition here", .{ component.name, component.loc });
 
             final.loc = loc;
             final.value = .{
@@ -125,7 +129,7 @@ const Parser = struct {
                 .default_outputs_filled = false,
             };
             final.written = true;
-        } else return parser.err(loc, "TODO instruction <instruction>");
+        } else return parser.err(loc, "TODO instruction `{s}`\nnote: src/{s}:{d}: implement here", .{ instruction, @src().file, @src().line });
     }
 };
 
@@ -143,7 +147,7 @@ const Component = struct {
         var parser = Parser{ .arena = arena, .components = .empty };
 
         var lines_iter = std.mem.splitScalar(u8, src, '\n');
-        var loc: Parser.Srcloc = 0;
+        var loc: Parser.Srcloc = 1;
         while (lines_iter.next()) |line| : (loc += 1) {
             parser.parseLine(loc, line) catch |err| switch (err) {
                 error.OutOfMemory => return err,
@@ -151,13 +155,14 @@ const Component = struct {
             };
         }
 
+        if (parser.active_component != null) parser.err(parser.active_component.?.loc, "unfinished component", .{}) catch {};
         for (parser.components.entries.items(.value)) |component| {
             if (!component.written) {
-                parser.err(component.loc, "Component not defined") catch {};
+                parser.err(component.loc, "component not defined", .{}) catch {};
             }
         }
 
-        if (parser.components.count() < 1) return parser.err(loc, "Must define at least one component");
+        if (parser.components.count() < 1) parser.err(loc, "Must define at least one component", .{}) catch {};
         if (parser.has_errors) return error.ParseError;
 
         // fill default_outputs for all components, only if there were no errors
