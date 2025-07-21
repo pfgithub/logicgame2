@@ -101,7 +101,8 @@ const Parser = struct {
         const value = try parser.parseInt(loc, split.next() orelse return parser.err(loc, "missing split rhs", .{}));
         if (split.next() != null) return parser.err(loc, "extra slash", .{});
         if (size > 64) return parser.err(loc, "size out of range", .{});
-        return .{ .mask = (@as(u64, 1) << @as(u6, @intCast(size))) - 1, .int = value };
+        const mask: u64 = (@as(u64, 1) << @as(u6, @intCast(size))) - 1;
+        return .{ .mask = mask, .int = value & mask };
     }
 
     fn parseLine(parser: *Parser, loc: Srcloc, line: []const u8) !void {
@@ -305,7 +306,7 @@ const Component = struct {
             @memcpy(owner_states[0..component.expected_inputs], parser_test.inputs);
             component.value.simulate(owner_states, owner_inputs, owner_outputs);
             const outputs = owner_states[0..component.expected_outputs];
-            for (parser_test.expected_outputs, outputs) |mask, *o| o.* = o.* & mask;
+            for (parser_test.expected_outputs, outputs) |mask, *o| o.* &= mask;
             if (!std.mem.eql(u64, parser_test.expected_outputs, outputs)) {
                 parser.err(parser_test.loc, "Test failure:\n  Expected: {any}\n  Received: {any}", .{ parser_test.expected_outputs, outputs }) catch {};
             }
