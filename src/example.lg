@@ -1,10 +1,23 @@
 DEFINE main -> 4lhs 4rhs
-    CALL subc 4lhs 4rhs -> 4out 1carry
-OUTPUT 4out 1carry DEFAULT 0 0
+    CALL sub4c 4lhs 4rhs -> 4out 1carry
+OUTPUT 4out 1carry
 
-DEFINE subc -> 4lhs 4rhs
-    4NOT 4rhs -> 4rhs_inv
-    4VALUE 1 -> 4one
-    4ADD 4rhs_inv 4one -> 4rhs_neg
-    4ADD 4lhs 4rhs_neg -> 4out 1carry
-OUTPUT 4out 1carry DEFAULT 0 0
+DEFINE sub4c -> 4lhs 4rhs
+    NOT 4rhs -> 4rhs_inv
+    ZERO -> 1zero
+    NOT 1zero -> 1one
+    JOIN-1-4 1zero 1zero 1zero 1one -> 4one
+    ADD-4 4rhs_inv 4one -> 4rhs_neg 1discard
+    ADD-4 4lhs 4rhs_neg -> 4out 1carry
+    NOT 1carry -> 1carry
+OUTPUT 4out 1carry
+
+TEST sub4c 3 1 -> 4/2 1/0
+TEST sub4c 2 1 -> 4/1 1/0
+TEST sub4c 1 1 -> 4/0 1/0
+TEST sub4c 0 1 -> 4/0 1/1
+
+TEST main 3 1 -> 4/2 1/0
+TEST main 2 1 -> 4/1 1/0
+TEST main 1 1 -> 4/0 1/0
+TEST main 0 1 -> 4/0 1/1

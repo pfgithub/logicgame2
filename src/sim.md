@@ -47,3 +47,11 @@ game:
 
 - square
 - touching wires connect
+
+
+interface:
+
+| . | . |
+|-|-|
+|EDITOR(90%)|Component Name,Component Browser|
+|play/stop/Test Cases|Stats(cycle time,area,energy usage)|
