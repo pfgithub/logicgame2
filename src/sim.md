@@ -79,6 +79,7 @@ size:
 - a 2x wire is 2x2. a 4x wire is 4x4
 - that means 4x wires take up less space than 4x 1 wires - that would take 7 tiles
   - this is good because 4x wires use less cpu than 4 1x wires, so we want to encourage them
+  - also it is a counterbalance because 2x wires are scale=2 which means they can't be placed in as many places as 1x wires
 - the splitter to split a 4x wire into a 1x wire is 7 tall
 
 
