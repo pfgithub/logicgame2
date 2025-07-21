@@ -80,7 +80,7 @@ const Parser = struct {
         if (trimmed.len == 0) return;
 
         var space_iter = std.mem.tokenizeScalar(u8, trimmed, ' ');
-        const instruction = space_iter.next() orelse parser.err(loc, "empty line");
+        const instruction = space_iter.next() orelse return parser.err(loc, "empty line");
         if (std.mem.eql(u8, instruction, "DEFINE")) {
             if (parser.active_component != null) return parser.err(loc, "DEFINE while active component extant");
             const name = space_iter.next() orelse return parser.err(loc, "missing DEFINE name");
@@ -109,7 +109,7 @@ const Parser = struct {
 
             const wire_states = try parser.arena.alloc(u64, component.wire_states.count());
             @memset(wire_states, 0);
-            const default_outputs = try parser.arena.alloc(u64, outputs.len);
+            const default_outputs = try parser.arena.alloc(u64, outputs.items.len);
             @memset(default_outputs, 0);
 
             const final = try parser.getComponent(loc, component.name, component.inputs.items.len, outputs.items.len);
@@ -118,9 +118,9 @@ const Parser = struct {
             final.loc = loc;
             final.value = .{
                 .wire_states = wire_states,
-                .instructions = component.instructions.toOwnedSlice(parser.arena),
-                .inputs = component.inputs.toOwnedSlice(parser.arena),
-                .outputs = outputs.toOwnedSlice(parser.arena),
+                .instructions = try component.instructions.toOwnedSlice(parser.arena),
+                .inputs = try component.inputs.toOwnedSlice(parser.arena),
+                .outputs = try outputs.toOwnedSlice(parser.arena),
                 .default_outputs = default_outputs,
                 .default_outputs_filled = false,
             };
@@ -136,7 +136,7 @@ const Component = struct {
     outputs: []Wire,
     default_outputs: []u64, // if we go the route of having 'transistor' be the only base component, this will always be @splat(0) so it's worthless
     default_outputs_filled: bool,
-    active_instruction: usize,
+    active_instruction: usize = 0,
     simulating: bool = false,
 
     fn parse(arena: std.mem.Allocator, src: []const u8) !*Component {
@@ -153,7 +153,7 @@ const Component = struct {
 
         for (parser.components.entries.items(.value)) |component| {
             if (!component.written) {
-                parser.err(component.loc, "Component not defined");
+                parser.err(component.loc, "Component not defined") catch {};
             }
         }
 
@@ -162,18 +162,19 @@ const Component = struct {
 
         // fill default_outputs for all components, only if there were no errors
         for (parser.components.entries.items(.value)) |component| {
-            if (component.default_outputs_filled) continue;
+            std.debug.assert(component.written);
+            if (component.value.default_outputs_filled) continue;
             const owner_states = try arena.alloc(u64, component.expected_inputs + component.expected_outputs);
             const owner_inputs = try arena.alloc(Wire, component.expected_inputs);
             const owner_outputs = try arena.alloc(Wire, component.expected_outputs);
             for (owner_states) |*a| a.* = 0;
             for (owner_inputs, 0..) |*a, i| a.* = i;
             for (owner_outputs, component.expected_inputs..) |*a, i| a.* = i;
-            component.simulate(owner_states, owner_inputs, owner_outputs);
-            std.debug.assert(component.default_outputs_filled);
+            component.value.simulate(owner_states, owner_inputs, owner_outputs);
+            std.debug.assert(component.value.default_outputs_filled);
         }
 
-        return &parser.components.entries.items(.value)[0].component;
+        return &parser.components.entries.items(.value)[0].value;
     }
 
     fn simulate(this: *Component, owner_states: []u64, owner_inputs: []Wire, owner_outputs: []Wire) void {
@@ -195,7 +196,7 @@ const Component = struct {
         while (this.active_instruction < this.instructions.len) {
             switch (this.instructions[this.active_instruction]) {
                 .call => |c| c.component.simulate(this.wire_states, c.args, c.ret),
-                .transistor_1_64 => |t| {
+                .transistor_64_1 => |t| {
                     const a: u64 = if (this.wire_states[t.a] & 1 == 1) std.math.maxInt(u64) else 0;
                     this.wire_states[t.c] = a & ~this.wire_states[t.b];
                 },
