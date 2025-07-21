@@ -73,4 +73,12 @@ structure:
 - It should be pretty simple to jit-compile the bytecode into simple CPU instructions for even more performance.
   - Just basic translation, no register allocation or anything. It should speed up execution, but by how much? And it will need to be implemented for both x86_64 and aarch64.
 
+size:
+
+- a wire is a bit less than 1x1, it connects to anything touching it
+- a 2x wire is 2x2. a 4x wire is 4x4
+- that means 4x wires take up less space than 4x 1 wires - that would take 7 tiles
+  - this is good because 4x wires use less cpu than 4 1x wires, so we want to encourage them
+- the splitter to split a 4x wire into a 1x wire is 7 tall
+
 
