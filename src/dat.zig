@@ -13,6 +13,8 @@ const PlacedComponent = struct {
 // 1x wire, 2x wire, 4x wire, 8x wire, 16x wire, 32x wire, 64x wire
 // n-to-n splitters and mergers for these wires
 //    - it would be nice if we didn't need this?
+//    - also these are directional unlike wires so there's a difference between
+//      a splitter and a merger which isn't ideal?
 // bridges
 //    - this might not be its own component
 //    - alternatives:
