@@ -2,23 +2,189 @@ const std = @import("std");
 
 const Simulator = struct {};
 
+const Wire = usize;
+
+pub fn main() !void {
+    var arena_alloc = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena_alloc.deinit();
+    const arena = arena_alloc.allocator();
+
+    const fcontents = try std.fs.cwd().readFileAlloc(arena, "src/example.lg", std.math.maxInt(usize));
+    const component = try Component.parse(arena, fcontents);
+    _ = component;
+}
+
+const Parser = struct {
+    const Srcloc = usize;
+    components: std.StringArrayHashMapUnmanaged(*ParserCompleteComponent),
+    active_component: ?ParserComponent = null,
+    arena: std.mem.Allocator,
+    has_errors: bool = false,
+
+    const ParserCompleteComponent = struct {
+        written: bool,
+        loc: Srcloc,
+        value: Component,
+
+        expected_inputs: usize,
+        expected_outputs: usize,
+    };
+
+    const ParserComponent = struct {
+        loc: Srcloc,
+        name: []const u8,
+        wire_states: std.StringArrayHashMapUnmanaged(void) = .empty,
+        instructions: std.ArrayListUnmanaged(SimulationInstruction) = .empty,
+        inputs: std.ArrayListUnmanaged(Wire) = .empty,
+        arena: std.mem.Allocator,
+
+        fn getWireState(component: *ParserComponent, parser: *Parser, loc: Srcloc, label: []const u8, mode: enum { any, get, add }) !Wire {
+            const gpres = try component.wire_states.getOrPut(component.arena, label);
+            if (gpres.found_existing) {
+                if (mode == .add) return parser.err(loc, "wire state already defined");
+                return gpres.index;
+            }
+            if (mode == .get) return parser.err(loc, "wire state not defined");
+            gpres.value_ptr.* = {};
+            return gpres.index;
+        }
+    };
+
+    fn getComponent(parser: *Parser, loc: Srcloc, label: []const u8, expected_inputs: usize, expected_outputs: usize) !*ParserCompleteComponent {
+        const gpres = try parser.components.getOrPut(parser.arena, label);
+        if (gpres.found_existing) {
+            if (gpres.value_ptr.*.*.expected_inputs != expected_inputs or gpres.value_ptr.*.*.expected_outputs != expected_outputs) {
+                return parser.err(loc, "Mismatched args counts (note: previous here <gpres.value_ptr.*.*.loc>)");
+            }
+            return gpres.value_ptr.*;
+        }
+        gpres.value_ptr.* = try parser.arena.create(ParserCompleteComponent);
+        gpres.value_ptr.*.* = .{
+            .written = false,
+            .loc = loc,
+            .value = undefined,
+            .expected_inputs = expected_inputs,
+            .expected_outputs = expected_outputs,
+        };
+        return gpres.value_ptr.*;
+    }
+
+    fn err(parser: *Parser, loc: Srcloc, msg: []const u8) error{ParseError} {
+        std.log.err("example.lg:{d}: error: {s}", .{ loc, msg });
+        parser.has_errors = true;
+        return error.ParseError;
+    }
+
+    fn parseLine(parser: *Parser, loc: Srcloc, line: []const u8) !void {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) return;
+
+        var space_iter = std.mem.tokenizeScalar(u8, trimmed, ' ');
+        const instruction = space_iter.next() orelse parser.err(loc, "empty line");
+        if (std.mem.eql(u8, instruction, "DEFINE")) {
+            if (parser.active_component != null) return parser.err(loc, "DEFINE while active component extant");
+            const name = space_iter.next() orelse return parser.err(loc, "missing DEFINE name");
+            const arrow = space_iter.next() orelse return parser.err(loc, "missing DEFINE arrow");
+            if (!std.mem.eql(u8, arrow, "->")) return parser.err(loc, "bad arrow");
+
+            parser.active_component = .{
+                .loc = loc,
+                .name = name,
+                .arena = parser.arena,
+            };
+            var component = &parser.active_component.?;
+
+            while (space_iter.next()) |item| {
+                try component.inputs.append(parser.arena, try component.getWireState(parser, loc, item, .add));
+            }
+        }
+        if (parser.active_component == null) return parser.err(loc, "missing active component");
+        var component = parser.active_component.?;
+
+        if (std.mem.eql(u8, instruction, "OUTPUT")) {
+            var outputs = std.ArrayListUnmanaged(Wire).empty;
+            while (space_iter.next()) |item| {
+                try outputs.append(parser.arena, try parser.active_component.?.getWireState(parser, loc, item, .add));
+            }
+
+            const wire_states = try parser.arena.alloc(u64, component.wire_states.count());
+            @memset(wire_states, 0);
+            const default_outputs = try parser.arena.alloc(u64, outputs.len);
+            @memset(default_outputs, 0);
+
+            const final = try parser.getComponent(loc, component.name, component.inputs.items.len, outputs.items.len);
+            if (final.written) return parser.err(loc, "duplicate component definition `component.name` (note: first definition at final.loc)");
+
+            final.loc = loc;
+            final.value = .{
+                .wire_states = wire_states,
+                .instructions = component.instructions.toOwnedSlice(parser.arena),
+                .inputs = component.inputs.toOwnedSlice(parser.arena),
+                .outputs = outputs.toOwnedSlice(parser.arena),
+                .default_outputs = default_outputs,
+                .default_outputs_filled = false,
+            };
+            final.written = true;
+        } else return parser.err(loc, "TODO instruction <instruction>");
+    }
+};
+
 const Component = struct {
     wire_states: []u64,
     instructions: []SimulationInstruction,
-    inputs: []usize,
-    outputs: []usize,
-    default_outputs: []u64, // what this component outputs for input 0,0
+    inputs: []Wire,
+    outputs: []Wire,
+    default_outputs: []u64, // if we go the route of having 'transistor' be the only base component, this will always be @splat(0) so it's worthless
+    default_outputs_filled: bool,
     active_instruction: usize,
     simulating: bool = false,
 
-    fn simulate(this: *Component, owner_states: []u64, owner_inputs: []u64, owner_outputs: []u64) void {
+    fn parse(arena: std.mem.Allocator, src: []const u8) !*Component {
+        var parser = Parser{ .arena = arena, .components = .empty };
+
+        var lines_iter = std.mem.splitScalar(u8, src, '\n');
+        var loc: Parser.Srcloc = 0;
+        while (lines_iter.next()) |line| : (loc += 1) {
+            parser.parseLine(loc, line) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                error.ParseError => continue,
+            };
+        }
+
+        for (parser.components.entries.items(.value)) |component| {
+            if (!component.written) {
+                parser.err(component.loc, "Component not defined");
+            }
+        }
+
+        if (parser.components.count() < 1) return parser.err(loc, "Must define at least one component");
+        if (parser.has_errors) return error.ParseError;
+
+        // fill default_outputs for all components, only if there were no errors
+        for (parser.components.entries.items(.value)) |component| {
+            if (component.default_outputs_filled) continue;
+            const owner_states = try arena.alloc(u64, component.expected_inputs + component.expected_outputs);
+            const owner_inputs = try arena.alloc(Wire, component.expected_inputs);
+            const owner_outputs = try arena.alloc(Wire, component.expected_outputs);
+            for (owner_states) |*a| a.* = 0;
+            for (owner_inputs, 0..) |*a, i| a.* = i;
+            for (owner_outputs, component.expected_inputs..) |*a, i| a.* = i;
+            component.simulate(owner_states, owner_inputs, owner_outputs);
+            std.debug.assert(component.default_outputs_filled);
+        }
+
+        return &parser.components.entries.items(.value)[0].component;
+    }
+
+    fn simulate(this: *Component, owner_states: []u64, owner_inputs: []Wire, owner_outputs: []Wire) void {
         std.debug.assert(!this.simulating); // recursive call not allowed
         this.simulating = true;
         defer this.simulating = false;
 
-        if (for (owner_inputs) |arg| {
+        const inputs_all_zero = for (owner_inputs) |arg| {
             if (owner_states[arg] != 0) break false;
-        } else true) {
+        } else true;
+        if (inputs_all_zero and this.default_outputs_filled) {
             for (owner_outputs, this.default_outputs) |oo, do| owner_states[oo] = do;
             return;
         }
@@ -40,7 +206,13 @@ const Component = struct {
             this.active_instruction += 1;
         }
 
-        for (owner_outputs, this.outputs) |oi, ti| this.wire_states[ti] = owner_states[oi];
+        for (owner_outputs, this.outputs) |oi, ti| owner_states[oi] = this.wire_states[ti];
+        if (inputs_all_zero and !this.default_outputs_filled) {
+            for (this.default_outputs, this.outputs) |*oi, ti| {
+                oi.* = this.wire_states[ti];
+            }
+            this.default_outputs_filled = true;
+        }
     }
 };
 
@@ -61,15 +233,15 @@ const SimulationInstruction = union(enum) {
 };
 
 const Basic = struct {
-    a: usize,
-    b: usize,
-    c: usize,
-    d: usize,
-    e: usize,
+    a: Wire,
+    b: Wire,
+    c: Wire,
+    d: Wire,
+    e: Wire,
 };
 
 const CallArgs = struct {
     component: *Component,
-    args: []usize,
-    ret: []usize,
+    args: []Wire,
+    ret: []Wire,
 };
