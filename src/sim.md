@@ -82,4 +82,6 @@ size:
   - also it is a counterbalance because 2x wires are scale=2 which means they can't be placed in as many places as 1x wires
 - the splitter to split a 4x wire into a 1x wire is 7 tall
 
-
+do we do wire width?
+- seems complicated idk
+- the point of this is to make energy usage more meaningful
