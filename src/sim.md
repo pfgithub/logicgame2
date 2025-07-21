@@ -55,3 +55,22 @@ interface:
 |-|-|
 |EDITOR(90%)|Component Name,Component Browser|
 |play/stop/Test Cases|Stats(cycle time,area,energy usage)|
+
+
+structure:
+
+- A component is a grid with components. Components are all rectangular.
+  - Components have 1 square padding around the edge. In the padding square, you mark the inputs and outputs.
+  - You can click an input to toggle its previewed value.
+- The basic wire component is 1x1. There are sized wire components for 2x2, 4x4, 8x8, 16x16, ...
+- To compile a component:
+  - The component grid is converted to a component graph
+    - Cyclic graphs will error here, and the associated wires can be rendered in an error state
+  - The component graph is rendered to component bytecode
+    - When it's the main component, wire states cannot be reused because they are needed for rendering.
+    - When it is a sub-component, wire states can be reused. The graph should be able to identify lots of opportunities for this.
+- The scene is converted to bytecode for faster execution
+- It should be pretty simple to jit-compile the bytecode into simple CPU instructions for even more performance.
+  - Just basic translation, no register allocation or anything. It should speed up execution, but by how much? And it will need to be implemented for both x86_64 and aarch64.
+
+
