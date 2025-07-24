@@ -3,11 +3,23 @@ const Component = struct {
     br: @Vector(2, i32),
     base_scale: i32, // 1,2,4,8,16,32
 
-    data: []PlacedComponent,
+    octree: QuadtreeEntry,
 };
-const PlacedComponent = struct {
-    ul: @Vector(2, i32),
+
+const QuadtreeEntry = struct {
+    parts: []Part,
+    subtree: ?*[4]QuadtreeEntry,
+    average: u32, // average color of the 8 children
 };
+const Part = struct {};
+
+// what to do?
+// for now let's do parts: []Parts
+// each part has xywh and data
+// each wire piece is a seperate part
+// wires connect to any adjacent wire (flood fill)
+//
+// what to do about wire crosses? not sure
 
 // basic components:
 // 1x wire, 2x wire, 4x wire, 8x wire, 16x wire, 32x wire, 64x wire
