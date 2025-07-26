@@ -122,3 +122,8 @@ const Component = struct {
 //      - o2: if you drag a wire across another wire it makes a long wire that doesn't connect
 // 1-1 npn "transistor" (or not gate, we choose)
 // all other components are user components
+
+// instead of electricity it could be water that only goes down
+// that would be really funny. but maybe less fun? although it could have crazy graphics up close
+// and registers would need to output to the bottom and input from the top which sucks
+// can't make a register as a component.
