@@ -98,6 +98,17 @@ const Component = struct {
     tag: enum {
         wire,
         custom,
+
+        transistor_npn,
+        microled,
+        buffer,
+        wire_1,
+        wire_2,
+        wire_4,
+        wire_8,
+        wire_16,
+        wire_32,
+        wire_64,
     },
 };
 
