@@ -3,7 +3,7 @@ const util = @import("snapshot.zig");
 
 const ivec2 = @Vector(2, i32);
 
-pub fn main() !void {
+test {
     var debug_allocator = std.heap.DebugAllocator(.{}).init;
     defer std.debug.assert(debug_allocator.deinit() == .ok);
     const gpa = debug_allocator.allocator();

@@ -1,5 +1,22 @@
 const std = @import("std");
 
+pub fn main() !u8 {
+    var debug_allocator = std.heap.DebugAllocator(.{}).init;
+    defer std.debug.assert(debug_allocator.deinit() == .ok);
+    const gpa = debug_allocator.allocator();
+
+    const args = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, args);
+
+    if (args.len < 2) return error.NoArgs;
+
+    var proc = std.process.Child.init(args[1..], gpa);
+    const term = try proc.spawnAndWait();
+    if (term != .Exited or term.Exited != 0) return 1;
+
+    return 0;
+}
+
 fn getSnapfile() ?[]const u8 {
     const static = struct {
         var _snapfile_written = false;
