@@ -3,15 +3,12 @@ const std = @import("std");
 const Encoder = struct {
     rem: []u8,
     fn InputType(comptime T: type) type {
-        return T;
+        return *const T;
     }
-    fn OutputType(comptime _: type) type {
-        return void;
-    }
-    fn int(xc: *Encoder, comptime T: type, intval: T) !T {
-        std.mem.writeInt(u64, xc.rem[0..@sizeOf(T)], intval, .little);
+    pub const OutputType = void;
+    fn int(xc: *Encoder, comptime T: type, intval: *const T) void {
+        std.mem.writeInt(u64, xc.rem[0..@sizeOf(T)], intval.*, .little);
         xc.rem = xc.rem[@sizeOf(T)..];
-        return intval;
     }
     fn sizedSlice(xs: *Encoder, len: usize, txt: []const u8) ![]const u8 {
         std.debug.assert(len == txt.len);
@@ -20,21 +17,18 @@ const Encoder = struct {
         return txt;
     }
 
-    fn result(_: *Encoder, _: anytype) void {
+    fn result(_: *Encoder) void {
         return {};
     }
 };
 const EncoderCounter = struct {
     count: usize,
     fn InputType(comptime T: type) type {
-        return T;
+        return *const T;
     }
-    fn OutputType(comptime _: type) type {
-        return usize;
-    }
-    inline fn int(xc: *EncoderCounter, comptime T: type, intval: T) !T {
+    pub const OutputType = usize;
+    inline fn int(xc: *EncoderCounter, comptime T: type, _: *const T) void {
         xc.count += @sizeOf(T);
-        return intval;
     }
     inline fn sizedSlice(xc: *EncoderCounter, len: usize, txt: []const u8) ![]const u8 {
         std.debug.assert(len == txt.len);
@@ -42,20 +36,19 @@ const EncoderCounter = struct {
         return txt;
     }
 
-    inline fn result(xc: *EncoderCounter, _: anytype) usize {
+    inline fn result(xc: *EncoderCounter) usize {
         return xc.count;
     }
 };
 const Decoder = struct {
     rem: []const u8,
-    fn InputType(comptime _: type) type {
-        return void;
+    slen: usize,
+    fn InputType(comptime T: type) type {
+        return *T;
     }
-    fn OutputType(comptime T: type) type {
-        return !T;
-    }
-    fn result(_: *Decoder, val: anytype) @TypeOf(val) {
-        return val;
+    pub const OutputType = error{Decode}!usize;
+    fn result(xc: *Decoder) usize {
+        return xc.slen - xc.rem.len;
     }
 };
 
@@ -63,7 +56,7 @@ fn XS(comptime Backing: type) type {
     return struct {
         backing: *Backing,
         const XSelf = @This();
-        inline fn int(xc: XSelf, comptime T: type, intval: T) !T {
+        inline fn int(xc: XSelf, comptime T: type, intval: Backing.InputType(T)) !void {
             return xc.backing.int(T, intval);
         }
         inline fn sizedSlice(xs: XSelf, len: usize, txt: []const u8) ![]const u8 {
@@ -73,8 +66,8 @@ fn XS(comptime Backing: type) type {
             const len = try xc.int(u64, txt.len);
             return try xc.sizedSlice(len, txt);
         }
-        inline fn result(xc: XSelf, val: anytype) Backing.OutputType(@TypeOf(val)) {
-            return xc.backing.result(val);
+        inline fn result(xc: XSelf) Backing.OutputType {
+            return xc.backing.result();
         }
     };
 }
@@ -89,20 +82,17 @@ const Src = struct {
 };
 fn xcodeSrc(
     comptime T: type,
-    xs: XS(T),
-    value: Src,
-) T.OutputType(std.builtin.SourceLocation) {
-    var res: Src = .{ .module = "", .file = "", .fn_name = "", .actual = "", .line = 0, .column = 0 };
+    xc: XS(T),
+    value: T.InputType(Src),
+) T.OutputType {
+    // try xc.slice(&value.module);
+    // try xc.slice(&value.file);
+    // try xc.slice(&value.fn_name);
+    // try xc.slice(&value.actual);
+    try xc.int(u64, &value.line);
+    try xc.int(u64, &value.column);
 
-    // consider `try xs.slice(&res.module)`
-    res.module = try xs.slice(value.module);
-    res.file = try xs.slice(value.file);
-    res.fn_name = try xs.slice(value.fn_name);
-    res.actual = try xs.slice(value.actual);
-    res.line = try xs.int(u64, value.line);
-    res.column = try xs.int(u64, value.column);
-
-    return xs.result(res);
+    return xc.result();
 }
 
 pub fn main() !u8 {
@@ -128,7 +118,7 @@ pub fn main() !u8 {
     try env_map.put("ZIG_ZNAPSHOT_FILE", path);
     proc.env_map = &env_map;
     const term = try proc.spawnAndWait();
-
+    // const fcont = try std.fs.cwd().readFileAlloc(gpa, path, std.math.maxInt(usize));
     if (term != .Exited or term.Exited != 0) return 1;
 
     return 0;
@@ -172,11 +162,11 @@ pub fn snapshot(actual: []const u8, src: std.builtin.SourceLocation, expected: ?
                 .column = src.column,
             };
             var ec: EncoderCounter = .{ .count = 0 };
-            const count = xcodeSrc(EncoderCounter, .{ .backing = &ec }, srcval);
+            const count = xcodeSrc(EncoderCounter, .{ .backing = &ec }, &srcval);
             const buf = try std.heap.smp_allocator.alloc(u8, count);
             defer std.heap.smp_allocator.free(buf);
             var ew: Encoder = .{ .rem = buf };
-            xcodeSrc(Encoder, .{ .backing = &ew }, srcval);
+            xcodeSrc(Encoder, .{ .backing = &ew }, &srcval);
 
             try f.writeAll(buf);
 
