@@ -1,5 +1,110 @@
 const std = @import("std");
 
+const Encoder = struct {
+    rem: []u8,
+    fn InputType(comptime T: type) type {
+        return T;
+    }
+    fn OutputType(comptime _: type) type {
+        return void;
+    }
+    fn int(xc: *Encoder, comptime T: type, intval: T) !T {
+        std.mem.writeInt(u64, xc.rem[0..@sizeOf(T)], intval, .little);
+        xc.rem = xc.rem[@sizeOf(T)..];
+        return intval;
+    }
+    fn sizedSlice(xs: *Encoder, len: usize, txt: []const u8) ![]const u8 {
+        std.debug.assert(len == txt.len);
+        @memcpy(xs.rem[0..txt.len], txt);
+        xs.rem = xs.rem[txt.len..];
+        return txt;
+    }
+
+    fn result(_: *Encoder, _: anytype) void {
+        return {};
+    }
+};
+const EncoderCounter = struct {
+    count: usize,
+    fn InputType(comptime T: type) type {
+        return T;
+    }
+    fn OutputType(comptime _: type) type {
+        return usize;
+    }
+    inline fn int(xc: *EncoderCounter, comptime T: type, intval: T) !T {
+        xc.count += @sizeOf(T);
+        return intval;
+    }
+    inline fn sizedSlice(xc: *EncoderCounter, len: usize, txt: []const u8) ![]const u8 {
+        std.debug.assert(len == txt.len);
+        xc.count += txt.len;
+        return txt;
+    }
+
+    inline fn result(xc: *EncoderCounter, _: anytype) usize {
+        return xc.count;
+    }
+};
+const Decoder = struct {
+    rem: []const u8,
+    fn InputType(comptime _: type) type {
+        return void;
+    }
+    fn OutputType(comptime T: type) type {
+        return !T;
+    }
+    fn result(_: *Decoder, val: anytype) @TypeOf(val) {
+        return val;
+    }
+};
+
+fn XS(comptime Backing: type) type {
+    return struct {
+        backing: *Backing,
+        const XSelf = @This();
+        inline fn int(xc: XSelf, comptime T: type, intval: T) !T {
+            return xc.backing.int(T, intval);
+        }
+        inline fn sizedSlice(xs: XSelf, len: usize, txt: []const u8) ![]const u8 {
+            return xs.backing.sizedSlice(len, txt);
+        }
+        fn slice(xc: XSelf, txt: []const u8) ![]const u8 {
+            const len = try xc.int(u64, txt.len);
+            return try xc.sizedSlice(len, txt);
+        }
+        inline fn result(xc: XSelf, val: anytype) Backing.OutputType(@TypeOf(val)) {
+            return xc.backing.result(val);
+        }
+    };
+}
+
+const Src = struct {
+    module: []const u8,
+    file: []const u8,
+    fn_name: []const u8,
+    actual: []const u8,
+    line: u64,
+    column: u64,
+};
+fn xcodeSrc(
+    comptime T: type,
+    xs: XS(T),
+    value: Src,
+) T.OutputType(std.builtin.SourceLocation) {
+    var res: Src = .{ .module = "", .file = "", .fn_name = "", .actual = "", .line = 0, .column = 0 };
+
+    // consider `try xs.slice(&res.module)`
+    res.module = try xs.slice(value.module);
+    res.file = try xs.slice(value.file);
+    res.fn_name = try xs.slice(value.fn_name);
+    res.actual = try xs.slice(value.actual);
+    res.line = try xs.int(u64, value.line);
+    res.column = try xs.int(u64, value.column);
+
+    return xs.result(res);
+}
+
 pub fn main() !u8 {
     var debug_allocator = std.heap.DebugAllocator(.{}).init;
     defer std.debug.assert(debug_allocator.deinit() == .ok);
@@ -11,7 +116,19 @@ pub fn main() !u8 {
     if (args.len < 2) return error.NoArgs;
 
     var proc = std.process.Child.init(args[1..], gpa);
+    var env_map = try std.process.getEnvMap(gpa);
+    defer env_map.deinit();
+    var rd: [16]u8 = undefined;
+    var dprng = std.Random.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
+    dprng.fill(&rd);
+    const path = try std.fmt.allocPrint(gpa, ".zig-cache/znapshot_{x}", .{&rd});
+    defer gpa.free(path);
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = "" });
+    defer std.fs.cwd().deleteFile(path) catch {};
+    try env_map.put("ZIG_ZNAPSHOT_FILE", path);
+    proc.env_map = &env_map;
     const term = try proc.spawnAndWait();
+
     if (term != .Exited or term.Exited != 0) return 1;
 
     return 0;
@@ -46,19 +163,22 @@ pub fn snapshot(actual: []const u8, src: std.builtin.SourceLocation, expected: ?
             defer f.close();
             try f.seekFromEnd(0);
 
-            var wbuf: [2048]u8 = undefined;
-            var writer = f.writer(&wbuf);
-            try writer.interface.writeInt(u64, src.module.len, .little);
-            try writer.interface.writeInt(u64, src.file.len, .little);
-            try writer.interface.writeInt(u64, src.fn_name.len, .little);
-            try writer.interface.writeInt(u64, actual.len, .little);
-            try writer.interface.writeInt(u64, src.line, .little);
-            try writer.interface.writeInt(u64, src.column, .little);
-            try writer.interface.writeAll(src.module);
-            try writer.interface.writeAll(src.file);
-            try writer.interface.writeAll(src.fn_name);
-            try writer.interface.writeAll(actual);
-            try writer.interface.flush();
+            const srcval: Src = .{
+                .module = src.module,
+                .file = src.file,
+                .fn_name = src.fn_name,
+                .actual = actual,
+                .line = src.line,
+                .column = src.column,
+            };
+            var ec: EncoderCounter = .{ .count = 0 };
+            const count = xcodeSrc(EncoderCounter, .{ .backing = &ec }, srcval);
+            const buf = try std.heap.smp_allocator.alloc(u8, count);
+            defer std.heap.smp_allocator.free(buf);
+            var ew: Encoder = .{ .rem = buf };
+            xcodeSrc(Encoder, .{ .backing = &ew }, srcval);
+
+            try f.writeAll(buf);
 
             return; // success (s'posedly)
         }
