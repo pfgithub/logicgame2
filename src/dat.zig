@@ -1,17 +1,105 @@
+const std = @import("std");
+const util = @import("snapshot.zig");
+
+const ivec2 = @Vector(2, i32);
+
+pub fn main() !void {
+    var debug_allocator = std.heap.DebugAllocator(.{}).init;
+    defer std.debug.assert(debug_allocator.deinit() == .ok);
+    const gpa = debug_allocator.allocator();
+
+    var board: Board = .{ .gpa = gpa };
+    defer board.deinit();
+
+    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(), null);
+}
+
+const ComponentID = enum(u32) { _ }; // TODO generational index, maybe in a memory pool
+const Board = struct {
+    gpa: std.mem.Allocator,
+    components: std.ArrayListUnmanaged(Component) = .empty,
+
+    placing_wire: ?struct {
+        component: ComponentID,
+        centerpt: ivec2,
+    } = null,
+
+    pub fn deinit(board: *Board) void {
+        board.components.deinit(board.gpa);
+    }
+
+    pub fn format(board: *const Board, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        try w.writeAll("components:\n");
+        for (board.components.items) |component| {
+            try w.print("- type: {s}\n", .{@tagName(component.tag)});
+            try w.print("  pos: {d},{d},{d},{d}\n", .{ component.ul[0], component.ul[1], component.br[0], component.br[1] });
+        }
+    }
+
+    pub fn mutComponent(board: *Board, component: ComponentID) ?*Component {
+        return &board.components.items[component];
+    }
+    pub fn addComponent(board: *Board, data: Component) !ComponentID {
+        if (board.components.items.len >= std.math.maxInt(u32)) return error.TooManyComponents;
+        try board.components.append(board.gpa, data);
+        return @enumFromInt(@as(u32, @intCast(board.components.items.len - 1)));
+    }
+
+    pub fn onMouseOp(board: *Board, mpos: ivec2, op: enum { down, drag, hover }) void {
+        switch (op) {
+            .down => {
+                const component = board.addComponent(.{
+                    .ul = mpos,
+                    .br = mpos + ivec2{ 1, 1 },
+                    .tag = .wire,
+                }) catch {};
+                board.placing_wire = .{
+                    .component = component,
+                    .centerpt = mpos,
+                };
+            },
+            .drag, .up => {
+                if (board.placing_wire) |pwire| {
+                    const mut = board.mutComponent(pwire.component) orelse {
+                        // component del-eted while placing
+                        board.placing_wire = null;
+                        return;
+                    };
+                    const centerpt = pwire.centerpt;
+                    const target = mpos;
+                    const diff = target - centerpt;
+                    // now choose axis
+                    const absdiff = @abs(diff);
+                    var finalsize = diff;
+                    if (absdiff[0] > absdiff[1]) {
+                        finalsize = .{ diff[0], 0 }; // x axis
+                    } else {
+                        finalsize = .{ 0, diff[1] }; // y axis
+                    }
+                    const pos1 = centerpt;
+                    const pos2 = centerpt + finalsize;
+                    const ul = @min(pos1, pos2);
+                    const br = @max(pos1, pos2) + ivec2{ 1, 1 };
+
+                    mut.ul = ul;
+                    mut.br = br;
+
+                    if (op == .up) board.placing_wire = null;
+                }
+            },
+            .hover => {},
+        }
+    }
+};
+
 const Component = struct {
-    ul: @Vector(2, i32),
-    br: @Vector(2, i32),
-    base_scale: i32, // 1,2,4,8,16,32
-
-    octree: QuadtreeEntry,
+    ul: ivec2,
+    br: ivec2,
+    tag: enum {
+        wire,
+        custom,
+    },
 };
-
-const QuadtreeEntry = struct {
-    parts: []Part,
-    subtree: ?*[4]QuadtreeEntry,
-    average: u32, // average color of the 8 children
-};
-const Part = struct {};
 
 // what to do?
 // for now let's do parts: []Parts
