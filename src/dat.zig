@@ -61,6 +61,14 @@ test "dat" {
 
 const ComponentID = enum(u32) { _ }; // TODO generational index, maybe in a memory pool
 const Board = struct {
+    // TODO interactions:
+    // - drag existing component (not wire)
+    // - delete existing component (right-click?)
+    // - box-select (shift left-click?)
+    // - add to selection (left-click?)
+    // - pan and zoom camera
+    // - place new component
+
     gpa: std.mem.Allocator,
     components: std.ArrayListUnmanaged(Component) = .empty,
 
