@@ -264,7 +264,15 @@ pub fn main() !u8 {
                     // 1. commit up to this point
                     try commitRem(&open_file_new_cont, gpa, open_file_cont, &open_file_uncommitted, open_file_index);
                     // 2. skip /^@src\(\),(\s*null|(\s*\\[^\n]*)+)/
-                    open_file_index += getLength(open_file_cont.?[open_file_index..]) orelse return error.Bad;
+                    const got_len = getLength(open_file_cont.?[open_file_index..]) orelse return error.Bad;
+                    for (open_file_cont.?[open_file_index..][0..got_len]) |byte| switch (byte) {
+                        '\n' => {
+                            open_file_col = 1;
+                            open_file_line += 1;
+                        },
+                        else => open_file_col += 1,
+                    };
+                    open_file_index += got_len;
                     open_file_uncommitted = open_file_index;
                     // 3. write new text
                     try open_file_new_cont.appendSlice(gpa, "@src(),\n");

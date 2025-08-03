@@ -14,54 +14,54 @@ test "dat" {
 
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
+        \\wires:
         \\
     );
     board.onMouseOp(.{ 5, 7 }, .down);
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
-        \\- type: wire
-        \\  pos: 5,7,1,1
+        \\wires:
+        \\- wire_1: 5,7 -> 5,7
         \\
     );
     board.onMouseOp(.{ 6, 7 }, .drag);
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
-        \\- type: wire
-        \\  pos: 5,7,2,1
+        \\wires:
+        \\- wire_1: 5,7 -> 6,7
         \\
     );
     board.onMouseOp(.{ 6, 8 }, .drag);
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
-        \\- type: wire
-        \\  pos: 5,7,1,2
+        \\wires:
+        \\- wire_1: 5,7 -> 5,8
         \\
     );
     board.onMouseOp(.{ 5, 8 }, .drag);
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
-        \\- type: wire
-        \\  pos: 5,7,1,2
+        \\wires:
+        \\- wire_1: 5,7 -> 5,8
         \\
     );
     board.onMouseOp(.{ 5, 3 }, .drag);
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
-        \\- type: wire
-        \\  pos: 5,3,1,5
+        \\wires:
+        \\- wire_1: 5,7 -> 5,3
         \\
     );
     board.onMouseOp(.{ 3, 7 }, .drag);
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
-        \\- type: wire
-        \\  pos: 3,7,3,1
+        \\wires:
+        \\- wire_1: 5,7 -> 3,7
         \\
     );
 }
 
-const WirePads = GenerationalPool(WirePad, .{ .keep_list = .unordered });
-const WireConnections = GenerationalPool(WireConnection, .{ .keep_list = .unordered });
+const Wires = GenerationalPool(Wire, .{ .keep_list = .unordered });
 const Components = GenerationalPool(Component, .{ .keep_list = .unordered });
 const Board = struct {
     // TODO interactions:
@@ -74,12 +74,10 @@ const Board = struct {
 
     gpa: std.mem.Allocator,
     components: Components,
-
-    wire_pads: WirePads,
-    wire_connections: WireConnections,
+    wires: Wires,
 
     placing_wire: ?struct {
-        component: Components.ID,
+        wire: Wires.ID,
         centerpt: ivec2,
     } = null,
 
@@ -87,14 +85,12 @@ const Board = struct {
         return .{
             .gpa = gpa,
             .components = .init(gpa),
-            .wire_pads = .init(gpa),
-            .wire_connections = .init(gpa),
+            .wires = .init(gpa),
         };
     }
     pub fn deinit(board: *Board) void {
         board.components.deinit();
-        board.wire_pads.deinit();
-        board.wire_connections.deinit();
+        board.wires.deinit();
     }
 
     pub fn format(board: *const Board, w: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -104,24 +100,36 @@ const Board = struct {
             try w.print("- type: {s}\n", .{@tagName(component.tag)});
             try w.print("  pos: {d},{d},{d},{d}\n", .{ component.ul[0], component.ul[1], component.size[0], component.size[1] });
         }
+        try w.writeAll("wires:\n");
+        for (board.wires.list.items) |wire_id| {
+            const wire = board.wires.mut(wire_id).?;
+            try w.print("- wire_{d}: {d},{d} -> {d},{d}\n", .{
+                @as(usize, wire.bitwidth_minus_one) + 1,
+                wire.from[0],
+                wire.from[1],
+                wire.to[0],
+                wire.to[1],
+            });
+        }
     }
 
     pub fn onMouseOp(board: *Board, mpos: ivec2, op: enum { down, drag, hover, up }) void {
         switch (op) {
             .down => {
-                const component = board.components.add(.{
-                    .ul = mpos,
-                    .size = ivec2{ 1, 1 },
-                    .tag = .wire,
+                const wire = board.wires.add(.{
+                    .from = mpos,
+                    .to = mpos,
+                    .bitwidth_minus_one = 0,
+                    .active = false,
                 }) catch return;
                 board.placing_wire = .{
-                    .component = component,
+                    .wire = wire,
                     .centerpt = mpos,
                 };
             },
             .drag, .up => {
                 if (board.placing_wire) |pwire| {
-                    const mut = board.components.mut(pwire.component) orelse {
+                    const mut = board.wires.mut(pwire.wire) orelse {
                         // component del-eted while placing
                         board.placing_wire = null;
                         return;
@@ -139,13 +147,14 @@ const Board = struct {
                     }
                     const pos1 = centerpt;
                     const pos2 = centerpt + finalsize;
-                    const ul = @min(pos1, pos2);
-                    const br = @max(pos1, pos2) + ivec2{ 1, 1 };
 
-                    mut.ul = ul;
-                    mut.size = br - ul;
+                    mut.from = pos1;
+                    mut.to = pos2;
 
-                    if (op == .up) board.placing_wire = null;
+                    if (op == .up) {
+                        mut.active = true;
+                        board.placing_wire = null;
+                    }
                 }
             },
             .hover => {},
@@ -153,13 +162,11 @@ const Board = struct {
     }
 };
 
-const WirePad = struct {
-    // does not collide with a component if a wire pad has a component at that location
-    ul: ivec2,
-};
-const WireConnection = struct {
-    start_wire: Components.ID,
-    end_wire: Components.ID,
+const Wire = struct {
+    from: ivec2,
+    to: ivec2,
+    bitwidth_minus_one: u6,
+    active: bool,
 };
 const Component = struct {
     ul: ivec2,
@@ -175,13 +182,6 @@ const Component = struct {
         // so it's just unnecessary complication
         microled,
         buffer,
-        wire_1,
-        wire_2,
-        wire_4,
-        wire_8,
-        wire_16,
-        wire_32,
-        wire_64,
     },
 };
 
