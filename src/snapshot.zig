@@ -5,7 +5,11 @@ const Encoder = struct {
     fn InputType(comptime T: type) type {
         return *const T;
     }
+    pub const ArgType = []u8;
     pub const OutputType = void;
+    pub fn init(arg: ArgType) Encoder {
+        return .{ .rem = arg };
+    }
     fn int(xc: *Encoder, comptime T: type, intval: *const T) !void {
         std.mem.writeInt(u64, xc.rem[0..@sizeOf(T)], intval.*, .little);
         xc.rem = xc.rem[@sizeOf(T)..];
@@ -25,7 +29,11 @@ const EncoderCounter = struct {
     fn InputType(comptime T: type) type {
         return *const T;
     }
+    pub const ArgType = void;
     pub const OutputType = usize;
+    pub fn init(_: ArgType) EncoderCounter {
+        return .{ .count = 0 };
+    }
     inline fn int(xc: *EncoderCounter, comptime T: type, _: *const T) !void {
         xc.count += @sizeOf(T);
     }
@@ -41,31 +49,46 @@ const EncoderCounter = struct {
 const Decoder = struct {
     rem: []const u8,
     slen: usize,
+    pub const ArgType = []const u8;
     fn InputType(comptime T: type) type {
         return *T;
     }
     pub const OutputType = error{Decode}!usize;
+    pub fn init(arg: ArgType) Decoder {
+        return .{ .rem = arg, .slen = arg.len };
+    }
     fn result(xc: *Decoder) usize {
         return xc.slen - xc.rem.len;
     }
 };
 
-fn XS(comptime Backing: type) type {
+fn XS(comptime Mode: XcodeMode) type {
     return struct {
-        backing: *Backing,
+        const Backing = switch (Mode) {
+            .count => EncoderCounter,
+            .encode => Encoder,
+            .decode => Decoder,
+        };
+        backing: Backing,
         const XSelf = @This();
-        inline fn int(xc: XSelf, comptime T: type, intval: Backing.InputType(T)) !void {
+        pub const ArgType = Backing.ArgType;
+        pub const InputType = Backing.InputType;
+        pub const OutputType = Backing.OutputType;
+        inline fn init(arg: Backing.ArgType) XSelf {
+            return .{ .backing = .init(arg) };
+        }
+        inline fn int(xc: *XSelf, comptime T: type, intval: Backing.InputType(T)) !void {
             try xc.backing.int(T, intval);
         }
-        inline fn sizedSlice(xs: XSelf, len: usize, txt: Backing.InputType([]const u8)) !void {
+        inline fn sizedSlice(xs: *XSelf, len: usize, txt: Backing.InputType([]const u8)) !void {
             try xs.backing.sizedSlice(len, txt);
         }
-        fn slice(xc: XSelf, txt: Backing.InputType([]const u8)) !void {
+        fn slice(xc: *XSelf, txt: Backing.InputType([]const u8)) !void {
             var len: usize = txt.len;
             try xc.int(u64, &len);
             try xc.sizedSlice(len, txt);
         }
-        inline fn result(xc: XSelf) Backing.OutputType {
+        inline fn result(xc: *XSelf) Backing.OutputType {
             return xc.backing.result();
         }
     };
@@ -79,11 +102,18 @@ const Src = struct {
     line: u64,
     column: u64,
 };
+const XcodeMode = enum {
+    count,
+    encode,
+    decode,
+};
 fn xcodeSrc(
-    comptime T: type,
-    xc: XS(T),
-    value: T.InputType(Src),
-) T.OutputType {
+    comptime mode: XcodeMode,
+    arg: XS(mode).ArgType,
+    value: XS(mode).InputType(Src),
+) XS(mode).OutputType {
+    var xc = XS(mode).init(arg);
+
     try xc.slice(&value.module);
     try xc.slice(&value.file);
     try xc.slice(&value.fn_name);
@@ -117,7 +147,13 @@ pub fn main() !u8 {
     try env_map.put("ZIG_ZNAPSHOT_FILE", path);
     proc.env_map = &env_map;
     const term = try proc.spawnAndWait();
-    // const fcont = try std.fs.cwd().readFileAlloc(gpa, path, std.math.maxInt(usize));
+    const fcont = try std.fs.cwd().readFileAlloc(gpa, path, std.math.maxInt(usize));
+    defer gpa.free(fcont);
+    // var rem = fcont;
+    // while(rem.len > 0) {
+    //     // var dec: Decoder = .{.rem = rem, .slen = };
+    //     // const len = try
+    // }
     if (term != .Exited or term.Exited != 0) return 1;
 
     return 0;
@@ -160,12 +196,10 @@ pub fn snapshot(actual: []const u8, src: std.builtin.SourceLocation, expected: ?
                 .line = src.line,
                 .column = src.column,
             };
-            var ec: EncoderCounter = .{ .count = 0 };
-            const count = xcodeSrc(EncoderCounter, .{ .backing = &ec }, &srcval);
+            const count = xcodeSrc(.count, {}, &srcval);
             const buf = try std.heap.smp_allocator.alloc(u8, count);
             defer std.heap.smp_allocator.free(buf);
-            var ew: Encoder = .{ .rem = buf };
-            xcodeSrc(Encoder, .{ .backing = &ew }, &srcval);
+            xcodeSrc(.encode, buf, &srcval);
 
             try f.writeAll(buf);
 
