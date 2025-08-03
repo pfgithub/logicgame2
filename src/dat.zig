@@ -72,6 +72,9 @@ const Board = struct {
     gpa: std.mem.Allocator,
     components: std.ArrayListUnmanaged(Component) = .empty,
 
+    wire_pads: std.ArrayListUnmanaged(WirePad) = .empty,
+    wire_connections: std.ArrayListUnmanaged(WireConnection) = .empty,
+
     placing_wire: ?struct {
         component: ComponentID,
         centerpt: ivec2,
@@ -79,6 +82,8 @@ const Board = struct {
 
     pub fn deinit(board: *Board) void {
         board.components.deinit(board.gpa);
+        board.wire_pads.deinit(board.gpa);
+        board.wire_connections.deinit(board.gpa);
     }
 
     pub fn format(board: *const Board, w: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -145,6 +150,14 @@ const Board = struct {
     }
 };
 
+const WirePad = struct {
+    // does not collide with a component if a wire pad has a component at that location
+    ul: ivec2,
+};
+const WireConnection = struct {
+    start_wire: ComponentID,
+    end_wire: ComponentID,
+};
 const Component = struct {
     ul: ivec2,
     size: ivec2,
@@ -169,29 +182,26 @@ const Component = struct {
     },
 };
 
-// what to do?
-// for now let's do parts: []Parts
-// each part has xywh and data
-// each wire piece is a seperate part
-// wires connect to any adjacent wire (flood fill)
+// wire design selection:
+
 //
-// what to do about wire crosses? not sure
+// a wire connects two wire pads in a horizontal line
+// wires can cross over eachother
+// if you put a wire pad between two other wire pads, it connects to the wire
+// sample
+//            _____
+//      X    [     ]
+// X----+----X NOT X
+//      X-X  [_____]
+//        |
+//        X
+//
+// components have wire pads on their i/o
+//
+//
+// wires cannot go thru components
 
-// basic components:
-// 1x wire, 2x wire, 4x wire, 8x wire, 16x wire, 32x wire, 64x wire
-// n-to-n splitters and mergers for these wires
-//    - it would be nice if we didn't need this?
-//    - also these are directional unlike wires so there's a difference between
-//      a splitter and a merger which isn't ideal?
-// bridges
-//    - this might not be its own component
-//    - alternatives:
-//      - o1: two layers where wires automatically make vias
-//      - o2: if you drag a wire across another wire it makes a long wire that doesn't connect
-// 1-1 npn "transistor" (or not gate, we choose)
-// all other components are user components
-
-// instead of electricity it could be water that only goes down
-// that would be really funny. but maybe less fun? although it could have crazy graphics up close
-// and registers would need to output to the bottom and input from the top which sucks
-// can't make a register as a component.
+// impl changes:
+// - we can seperate true components from wires & wire pads
+// - when you draw a wire, you place two wire pads and the components connecting them
+// - there are no implicit connections (except if you place a wire pad on a wire)
