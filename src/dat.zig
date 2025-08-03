@@ -15,6 +15,13 @@ test {
         \\components:
         \\
     );
+    board.onMouseOp(.{ 5, 7 }, .down);
+    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
+        \\components:
+        \\- type: wire
+        \\  pos: 5,7,1,1
+        \\
+    );
 }
 
 const ComponentID = enum(u32) { _ }; // TODO generational index, maybe in a memory pool
@@ -35,12 +42,12 @@ const Board = struct {
         try w.writeAll("components:\n");
         for (board.components.items) |component| {
             try w.print("- type: {s}\n", .{@tagName(component.tag)});
-            try w.print("  pos: {d},{d},{d},{d}\n", .{ component.ul[0], component.ul[1], component.br[0], component.br[1] });
+            try w.print("  pos: {d},{d},{d},{d}\n", .{ component.ul[0], component.ul[1], component.size[0], component.size[1] });
         }
     }
 
     pub fn mutComponent(board: *Board, component: ComponentID) ?*Component {
-        return &board.components.items[component];
+        return &board.components.items[@intFromEnum(component)];
     }
     pub fn addComponent(board: *Board, data: Component) !ComponentID {
         if (board.components.items.len >= std.math.maxInt(u32)) return error.TooManyComponents;
@@ -48,14 +55,14 @@ const Board = struct {
         return @enumFromInt(@as(u32, @intCast(board.components.items.len - 1)));
     }
 
-    pub fn onMouseOp(board: *Board, mpos: ivec2, op: enum { down, drag, hover }) void {
+    pub fn onMouseOp(board: *Board, mpos: ivec2, op: enum { down, drag, hover, up }) void {
         switch (op) {
             .down => {
                 const component = board.addComponent(.{
                     .ul = mpos,
-                    .br = mpos + ivec2{ 1, 1 },
+                    .size = ivec2{ 1, 1 },
                     .tag = .wire,
-                }) catch {};
+                }) catch return;
                 board.placing_wire = .{
                     .component = component,
                     .centerpt = mpos,
@@ -85,7 +92,7 @@ const Board = struct {
                     const br = @max(pos1, pos2) + ivec2{ 1, 1 };
 
                     mut.ul = ul;
-                    mut.br = br;
+                    mut.size = br - ul;
 
                     if (op == .up) board.placing_wire = null;
                 }
@@ -97,7 +104,7 @@ const Board = struct {
 
 const Component = struct {
     ul: ivec2,
-    br: ivec2,
+    size: ivec2,
     tag: enum {
         wire,
         custom,
