@@ -242,6 +242,13 @@ pub fn main() !u8 {
             open_file_uncommitted = 0;
         }
 
+        // alternate, maybe simpler impl:
+        // - in the ast tree, find the `@src()` node with the specified lyn/col (this might be trivial? like maybe you scan the tokens array or something)
+        // - find the next node after the comma and it to the omit list
+        //   - first make sure it's either 'null' or a multiline string
+        // - then have add to the print after list
+        // - this would use the Fixups api in Ast.render()
+
         while (open_file_index <= open_file_cont.?.len) {
             std.debug.assert(open_file_line <= sourc.line);
             if (open_file_line == sourc.line) {
@@ -299,7 +306,7 @@ fn finishAndWrite(open_file_index: *usize, open_file_cont: *?[]const u8, open_fi
     renderres.clearRetainingCapacity();
     var writer = renderres.writer(gpa);
     var writerNew = writer.adaptToNewApi();
-    try tree.render(gpa, &writerNew.new_interface, .{}); // maybe we could replace all of that stuf with a combo of omit_node and append_string_after_node
+    try tree.render(gpa, &writerNew.new_interface, .{});
     try std.fs.cwd().writeFile(.{ .sub_path = open_file_full_path.?, .data = renderres.items });
     gpa.free(open_file_cont.*.?);
     open_file_cont.* = null;
