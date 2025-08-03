@@ -11,7 +11,10 @@ test {
     var board: Board = .{ .gpa = gpa };
     defer board.deinit();
 
-    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(), null);
+    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
+        \\components:
+        \\
+    );
 }
 
 const ComponentID = enum(u32) { _ }; // TODO generational index, maybe in a memory pool

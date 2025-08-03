@@ -20,7 +20,8 @@ const Encoder = struct {
         xs.rem = xs.rem[txt.len..];
     }
 
-    fn result(_: *Encoder) void {
+    fn result(xs: *Encoder) void {
+        std.debug.assert(xs.rem.len == 0);
         return {};
     }
 };
@@ -56,6 +57,21 @@ const Decoder = struct {
     pub const OutputType = error{Decode}!usize;
     pub fn init(arg: ArgType) Decoder {
         return .{ .rem = arg, .slen = arg.len };
+    }
+    fn readSlice(xc: *Decoder, len: usize) ![]const u8 {
+        if (xc.rem.len < len) return error.Decode;
+        defer xc.rem = xc.rem[len..];
+        return xc.rem[0..len];
+    }
+    fn readArray(xc: *Decoder, comptime len: usize) !*const [len]u8 {
+        return (try xc.readSlice(len))[0..len];
+    }
+    fn int(xc: *Decoder, comptime T: type, res: *T) !void {
+        const val = try xc.readArray(@sizeOf(T));
+        res.* = std.mem.readInt(T, val, .little);
+    }
+    fn sizedSlice(xc: *Decoder, len: usize, txt: *[]const u8) !void {
+        txt.* = try xc.readSlice(len);
     }
     fn result(xc: *Decoder) usize {
         return xc.slen - xc.rem.len;
@@ -101,6 +117,13 @@ const Src = struct {
     actual: []const u8,
     line: u64,
     column: u64,
+
+    fn lessThan(_: void, lhs: Src, rhs: Src) bool {
+        if (std.mem.order(u8, lhs.module, rhs.module) == .lt) return true;
+        if (std.mem.order(u8, lhs.file, rhs.file) == .lt) return true;
+        if (lhs.line < rhs.line) return true;
+        return lhs.column < rhs.column;
+    }
 };
 const XcodeMode = enum {
     count,
@@ -149,14 +172,116 @@ pub fn main() !u8 {
     const term = try proc.spawnAndWait();
     const fcont = try std.fs.cwd().readFileAlloc(gpa, path, std.math.maxInt(usize));
     defer gpa.free(fcont);
-    // var rem = fcont;
-    // while(rem.len > 0) {
-    //     // var dec: Decoder = .{.rem = rem, .slen = };
-    //     // const len = try
-    // }
+    var rem = fcont;
+    var sourcs = std.ArrayList(Src).init(gpa);
+    defer sourcs.deinit();
+    while (rem.len > 0) {
+        var res: Src = undefined;
+        const dec_len = try xcodeSrc(.decode, rem, &res);
+        rem = rem[dec_len..];
+        try sourcs.append(res);
+    }
+    std.mem.sort(Src, sourcs.items, {}, Src.lessThan);
+    var open_file_cont: ?[]const u8 = null;
+    defer if (open_file_cont) |of| gpa.free(of);
+    var open_file_full_path: ?[]const u8 = null;
+    defer if (open_file_full_path) |offp| gpa.free(offp);
+    var open_file_new_cont = std.ArrayListUnmanaged(u8).empty;
+    defer open_file_new_cont.deinit(gpa);
+    var renderres = std.ArrayListUnmanaged(u8).empty;
+    defer renderres.deinit(gpa);
+    var open_file_module: ?[]const u8 = null;
+    var open_file_path: ?[]const u8 = null;
+    var open_file_index: usize = 0;
+    var open_file_line: usize = 1;
+    var open_file_col: usize = 1;
+    var open_file_uncommitted: usize = 0;
+    for (sourcs.items) |sourc| {
+        std.log.debug("src: {any}", .{sourc});
+        if (open_file_cont == null or !std.mem.eql(u8, sourc.module, open_file_module.?) or !std.mem.eql(u8, sourc.file, open_file_path.?)) {
+            std.log.err("module: {s}", .{sourc.module});
+            if (std.mem.eql(u8, "root", sourc.module)) {
+                if (open_file_full_path) |offp| {
+                    gpa.free(offp);
+                    open_file_full_path = null;
+                }
+                open_file_full_path = try std.fs.path.join(gpa, &.{ "src", sourc.file });
+                if (open_file_cont != null) {
+                    try finishAndWrite(&open_file_index, &open_file_cont, &open_file_new_cont, gpa, &open_file_uncommitted, &renderres, open_file_full_path);
+                }
+                open_file_cont = try std.fs.cwd().readFileAlloc(gpa, open_file_full_path.?, std.math.maxInt(usize));
+                open_file_new_cont.clearRetainingCapacity();
+            } else {
+                return error.Err;
+            }
+            open_file_module = sourc.module;
+            open_file_path = sourc.file;
+            open_file_index = 0;
+            open_file_line = 1;
+            open_file_col = 1;
+            open_file_uncommitted = 0;
+        }
+
+        while (open_file_index <= open_file_cont.?.len) {
+            std.debug.assert(open_file_line <= sourc.line);
+            if (open_file_line == sourc.line) {
+                std.debug.assert(open_file_col <= sourc.column);
+                if (open_file_col == sourc.column) {
+                    // 1. commit up to this point
+                    try commitRem(&open_file_new_cont, gpa, open_file_cont, &open_file_uncommitted, open_file_index);
+                    // 2. skip /^@src\(\),(\s*null|(\s*\\[^\n]*)+)/
+                    open_file_index += getLength(open_file_cont.?[open_file_index..]) orelse return error.Bad;
+                    open_file_uncommitted = open_file_index;
+                    // 3. write new text
+                    try open_file_new_cont.appendSlice(gpa, "@src(),\n");
+                    var iter = std.mem.splitScalar(u8, sourc.actual, '\n');
+                    while (iter.next()) |line| {
+                        // todo: indent of parent line plus one. or let zig fmt deal with it.
+                        try open_file_new_cont.appendSlice(gpa, "\\\\");
+                        try open_file_new_cont.appendSlice(gpa, line);
+                        try open_file_new_cont.appendSlice(gpa, "\n");
+                    }
+                    break;
+                }
+            }
+
+            if (open_file_index == open_file_cont.?.len) break;
+            const byte = open_file_cont.?[open_file_index];
+            if (byte == '\n') {
+                open_file_col = 1;
+                open_file_line += 1;
+            } else {
+                open_file_col += 1;
+            }
+            open_file_index += 1;
+        }
+    }
+    if (open_file_cont != null) {
+        try finishAndWrite(&open_file_index, &open_file_cont, &open_file_new_cont, gpa, &open_file_uncommitted, &renderres, open_file_full_path);
+    }
     if (term != .Exited or term.Exited != 0) return 1;
 
     return 0;
+}
+fn commitRem(open_file_new_cont: *std.ArrayListUnmanaged(u8), gpa: std.mem.Allocator, open_file_cont: ?[]const u8, open_file_uncommitted: *usize, open_file_index: usize) !void {
+    try open_file_new_cont.appendSlice(gpa, open_file_cont.?[open_file_uncommitted.*..open_file_index]);
+    open_file_uncommitted.* = open_file_index;
+}
+fn finishAndWrite(open_file_index: *usize, open_file_cont: *?[]const u8, open_file_new_cont: *std.ArrayListUnmanaged(u8), gpa: std.mem.Allocator, open_file_uncommitted: *usize, renderres: *std.ArrayListUnmanaged(u8), open_file_full_path: ?[]const u8) !void {
+    // commit and write
+    open_file_index.* = open_file_cont.*.?.len;
+    try commitRem(open_file_new_cont, gpa, open_file_cont.*, open_file_uncommitted, open_file_index.*);
+    try open_file_new_cont.append(gpa, 0);
+    var tree = try std.zig.Ast.parse(gpa, open_file_new_cont.items[0 .. open_file_new_cont.items.len - 1 :0], .zig);
+    defer tree.deinit(gpa);
+    if (tree.errors.len != 0) return error.UpdErr;
+    renderres.clearRetainingCapacity();
+    var writer = renderres.writer(gpa);
+    var writerNew = writer.adaptToNewApi();
+    try tree.render(gpa, &writerNew.new_interface, .{}); // maybe we could replace all of that stuf with a combo of omit_node and append_string_after_node
+    try std.fs.cwd().writeFile(.{ .sub_path = open_file_full_path.?, .data = renderres.items });
+    gpa.free(open_file_cont.*.?);
+    open_file_cont.* = null;
 }
 
 fn getSnapfile() ?[]const u8 {
@@ -208,4 +333,59 @@ pub fn snapshot(actual: []const u8, src: std.builtin.SourceLocation, expected: ?
     }
     const EMPTY_SNAPSHOT = "[empty_snapshot]";
     try std.testing.expectEqualStrings(expected orelse if (std.mem.eql(u8, actual, EMPTY_SNAPSHOT)) EMPTY_SNAPSHOT ++ "_" else EMPTY_SNAPSHOT, actual);
+}
+
+/// unreviewed llm function:
+/// Implement a zig function for this regex: `/^@src\(\),(\s*null|(\s*\\[^\n]*)+)/`
+/// The function signature is `fn getLength(input: []const u8) ?usize`. It returns the
+/// number of bytes of length of the regex match, or null for no match.
+pub fn getLength(input: []const u8) ?usize {
+    const prefix = "@src(),";
+
+    // Check for the mandatory prefix /^@src\(\),/
+    if (!std.mem.startsWith(u8, input, prefix)) {
+        return null;
+    }
+
+    const rest = input[prefix.len..];
+    var cursor: usize = 0;
+
+    // First alternative: \s*null
+    var temp_cursor = cursor;
+    while (temp_cursor < rest.len and std.ascii.isWhitespace(rest[temp_cursor])) {
+        temp_cursor += 1;
+    }
+    if (std.mem.startsWith(u8, rest[temp_cursor..], "null")) {
+        return prefix.len + temp_cursor + "null".len;
+    }
+
+    // Second alternative: (\s*\\[^\n]*)+
+    var match_found = false;
+    while (cursor < rest.len) {
+        var line_start = cursor;
+
+        // Match \s*
+        while (line_start < rest.len and std.ascii.isWhitespace(rest[line_start])) {
+            line_start += 1;
+        }
+
+        if (line_start < rest.len and rest[line_start] == '\\') {
+            match_found = true;
+            var line_end = line_start + 1;
+
+            // Match [^\n]*
+            while (line_end < rest.len and rest[line_end] != '\n') {
+                line_end += 1;
+            }
+            cursor = line_end;
+        } else {
+            break;
+        }
+    }
+
+    if (match_found) {
+        return prefix.len + cursor;
+    }
+
+    return null;
 }
