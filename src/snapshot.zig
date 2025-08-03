@@ -171,7 +171,15 @@ pub fn main() !u8 {
     try spawn_args.append(gpa, last_arg);
 
     if (!update_snapshots) {
-        return std.process.execv(gpa, spawn_args.items);
+        if (std.process.can_execv) {
+            return std.process.execv(gpa, spawn_args.items);
+        } else {
+            var proc = std.process.Child.init(spawn_args.items, gpa);
+            const term = try proc.spawnAndWait();
+
+            if (term != .Exited) return 1;
+            return term.Exited;
+        }
     }
 
     var proc = std.process.Child.init(spawn_args.items, gpa);
@@ -188,7 +196,6 @@ pub fn main() !u8 {
     proc.env_map = &env_map;
 
     const term = try proc.spawnAndWait();
-    if (term != .Exited or term.Exited != 0) return 1;
 
     const fcont = try std.fs.cwd().readFileAlloc(gpa, path, std.math.maxInt(usize));
     defer gpa.free(fcont);
@@ -289,7 +296,8 @@ pub fn main() !u8 {
 
     std.log.info("{d} snapshots updated", .{sourcs.items.len});
 
-    return 0;
+    if (term != .Exited) return 1;
+    return term.Exited;
 }
 fn commitRem(open_file_new_cont: *std.ArrayListUnmanaged(u8), gpa: std.mem.Allocator, open_file_cont: ?[]const u8, open_file_uncommitted: *usize, open_file_index: usize) !void {
     try open_file_new_cont.appendSlice(gpa, open_file_cont.?[open_file_uncommitted.*..open_file_index]);

@@ -1,5 +1,6 @@
 const std = @import("std");
 const util = @import("snapshot.zig");
+const GenerationalPool = @import("generational_pool.zig").GenerationalPool;
 
 const ivec2 = @Vector(2, i32);
 
@@ -8,7 +9,7 @@ test "dat" {
     defer std.debug.assert(debug_allocator.deinit() == .ok);
     const gpa = debug_allocator.allocator();
 
-    var board: Board = .{ .gpa = gpa };
+    var board: Board = .init(gpa);
     defer board.deinit();
 
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
@@ -72,18 +73,25 @@ const Board = struct {
     gpa: std.mem.Allocator,
     components: std.ArrayListUnmanaged(Component) = .empty,
 
-    wire_pads: std.ArrayListUnmanaged(WirePad) = .empty,
-    wire_connections: std.ArrayListUnmanaged(WireConnection) = .empty,
+    wire_pads: GenerationalPool(WirePad),
+    wire_connections: GenerationalPool(WireConnection),
 
     placing_wire: ?struct {
         component: ComponentID,
         centerpt: ivec2,
     } = null,
 
+    pub fn init(gpa: std.mem.Allocator) Board {
+        return .{
+            .gpa = gpa,
+            .wire_pads = .init(gpa),
+            .wire_connections = .init(gpa),
+        };
+    }
     pub fn deinit(board: *Board) void {
         board.components.deinit(board.gpa);
-        board.wire_pads.deinit(board.gpa);
-        board.wire_connections.deinit(board.gpa);
+        board.wire_pads.deinit();
+        board.wire_connections.deinit();
     }
 
     pub fn format(board: *const Board, w: *std.Io.Writer) std.Io.Writer.Error!void {
