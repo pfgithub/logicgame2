@@ -6,15 +6,14 @@ const Encoder = struct {
         return *const T;
     }
     pub const OutputType = void;
-    fn int(xc: *Encoder, comptime T: type, intval: *const T) void {
+    fn int(xc: *Encoder, comptime T: type, intval: *const T) !void {
         std.mem.writeInt(u64, xc.rem[0..@sizeOf(T)], intval.*, .little);
         xc.rem = xc.rem[@sizeOf(T)..];
     }
-    fn sizedSlice(xs: *Encoder, len: usize, txt: []const u8) ![]const u8 {
+    fn sizedSlice(xs: *Encoder, len: usize, txt: *const []const u8) !void {
         std.debug.assert(len == txt.len);
-        @memcpy(xs.rem[0..txt.len], txt);
+        @memcpy(xs.rem[0..txt.len], txt.*);
         xs.rem = xs.rem[txt.len..];
-        return txt;
     }
 
     fn result(_: *Encoder) void {
@@ -27,13 +26,12 @@ const EncoderCounter = struct {
         return *const T;
     }
     pub const OutputType = usize;
-    inline fn int(xc: *EncoderCounter, comptime T: type, _: *const T) void {
+    inline fn int(xc: *EncoderCounter, comptime T: type, _: *const T) !void {
         xc.count += @sizeOf(T);
     }
-    inline fn sizedSlice(xc: *EncoderCounter, len: usize, txt: []const u8) ![]const u8 {
+    inline fn sizedSlice(xc: *EncoderCounter, len: usize, txt: *const []const u8) !void {
         std.debug.assert(len == txt.len);
         xc.count += txt.len;
-        return txt;
     }
 
     inline fn result(xc: *EncoderCounter) usize {
@@ -57,14 +55,15 @@ fn XS(comptime Backing: type) type {
         backing: *Backing,
         const XSelf = @This();
         inline fn int(xc: XSelf, comptime T: type, intval: Backing.InputType(T)) !void {
-            return xc.backing.int(T, intval);
+            try xc.backing.int(T, intval);
         }
-        inline fn sizedSlice(xs: XSelf, len: usize, txt: []const u8) ![]const u8 {
-            return xs.backing.sizedSlice(len, txt);
+        inline fn sizedSlice(xs: XSelf, len: usize, txt: Backing.InputType([]const u8)) !void {
+            try xs.backing.sizedSlice(len, txt);
         }
-        fn slice(xc: XSelf, txt: []const u8) ![]const u8 {
-            const len = try xc.int(u64, txt.len);
-            return try xc.sizedSlice(len, txt);
+        fn slice(xc: XSelf, txt: Backing.InputType([]const u8)) !void {
+            var len: usize = txt.len;
+            try xc.int(u64, &len);
+            try xc.sizedSlice(len, txt);
         }
         inline fn result(xc: XSelf) Backing.OutputType {
             return xc.backing.result();
@@ -85,10 +84,10 @@ fn xcodeSrc(
     xc: XS(T),
     value: T.InputType(Src),
 ) T.OutputType {
-    // try xc.slice(&value.module);
-    // try xc.slice(&value.file);
-    // try xc.slice(&value.fn_name);
-    // try xc.slice(&value.actual);
+    try xc.slice(&value.module);
+    try xc.slice(&value.file);
+    try xc.slice(&value.fn_name);
+    try xc.slice(&value.actual);
     try xc.int(u64, &value.line);
     try xc.int(u64, &value.column);
 
