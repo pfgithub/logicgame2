@@ -19,42 +19,49 @@ test "dat" {
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
         \\wires:
-        \\- wire_1: 5,7 -> 5,7
+        \\- wire_1: [inactive] 5,7 -> 5,7
         \\
     );
     board.onMouseOp(.{ 6, 7 }, .drag);
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
         \\wires:
-        \\- wire_1: 5,7 -> 6,7
+        \\- wire_1: [inactive] 5,7 -> 6,7
         \\
     );
     board.onMouseOp(.{ 6, 8 }, .drag);
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
         \\wires:
-        \\- wire_1: 5,7 -> 5,8
+        \\- wire_1: [inactive] 5,7 -> 5,8
         \\
     );
     board.onMouseOp(.{ 5, 8 }, .drag);
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
         \\wires:
-        \\- wire_1: 5,7 -> 5,8
+        \\- wire_1: [inactive] 5,7 -> 5,8
         \\
     );
     board.onMouseOp(.{ 5, 3 }, .drag);
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
         \\wires:
-        \\- wire_1: 5,7 -> 5,3
+        \\- wire_1: [inactive] 5,7 -> 5,3
         \\
     );
     board.onMouseOp(.{ 3, 7 }, .drag);
     try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
         \\components:
         \\wires:
-        \\- wire_1: 5,7 -> 3,7
+        \\- wire_1: [inactive] 5,7 -> 3,7
+        \\
+    );
+    board.onMouseOp(.{ 2, 6 }, .up);
+    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
+        \\components:
+        \\wires:
+        \\- wire_1: 5,7 -> 2,7
         \\
     );
 }
@@ -91,6 +98,12 @@ const Board = struct {
         board.wires.deinit();
     }
 
+    fn normalizeWires() void {
+        // TODO: find any wires where a start or end point overlaps another wire
+        // split that wire in two
+        // skip any wires that are not active, as these wires are not fully placed yet
+    }
+
     pub fn format(board: *const Board, w: *std.Io.Writer) std.Io.Writer.Error!void {
         try w.writeAll("components:\n");
         for (board.components.list.items) |component_id| {
@@ -101,8 +114,9 @@ const Board = struct {
         try w.writeAll("wires:\n");
         for (board.wires.list.items) |wire_id| {
             const wire = board.wires.mut(wire_id).?;
-            try w.print("- wire_{d}: {d},{d} -> {d},{d}\n", .{
+            try w.print("- wire_{d}:{s} {d},{d} -> {d},{d}\n", .{
                 @as(usize, wire.bitwidth_minus_one) + 1,
+                if (wire.active) "" else " [inactive]",
                 wire.from[0],
                 wire.from[1],
                 wire.to[0],
