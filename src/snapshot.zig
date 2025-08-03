@@ -156,8 +156,18 @@ pub fn main() !u8 {
     defer std.process.argsFree(gpa, args);
 
     if (args.len < 2) return error.NoArgs;
+    const last_arg = args[args.len - 1];
+    const middle_args = args[1 .. args.len - 1];
+    var update_snapshots = false;
+    for (middle_args) |arg| {
+        if (std.mem.eql(u8, arg, "-u") or std.mem.eql(u8, arg, "--update-snapshots")) {
+            update_snapshots = true;
+        } else {
+            return error.BadArgs;
+        }
+    }
 
-    var proc = std.process.Child.init(args[1..], gpa);
+    var proc = std.process.Child.init(&.{last_arg}, gpa);
     var env_map = try std.process.getEnvMap(gpa);
     defer env_map.deinit();
     var rd: [16]u8 = undefined;

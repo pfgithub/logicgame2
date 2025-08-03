@@ -29,7 +29,7 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("test", "test");
     const run = b.addRunArtifact(snapshot);
     run.step.dependOn(b.getInstallStep());
-    run.addFileArg(dat_test.getEmittedBin());
     run.addArgs(b.args orelse &.{});
+    run.addFileArg(dat_test.getEmittedBin());
     run_step.dependOn(&run.step);
 }
