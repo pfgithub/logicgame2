@@ -60,7 +60,9 @@ test "dat" {
     );
 }
 
-const ComponentID = enum(u32) { _ }; // TODO generational index, maybe in a memory pool
+const WirePads = GenerationalPool(WirePad, .{ .keep_list = .unordered });
+const WireConnections = GenerationalPool(WireConnection, .{ .keep_list = .unordered });
+const Components = GenerationalPool(Component, .{ .keep_list = .unordered });
 const Board = struct {
     // TODO interactions:
     // - drag existing component (not wire)
@@ -71,50 +73,43 @@ const Board = struct {
     // - place new component
 
     gpa: std.mem.Allocator,
-    components: std.ArrayListUnmanaged(Component) = .empty,
+    components: Components,
 
-    wire_pads: GenerationalPool(WirePad),
-    wire_connections: GenerationalPool(WireConnection),
+    wire_pads: WirePads,
+    wire_connections: WireConnections,
 
     placing_wire: ?struct {
-        component: ComponentID,
+        component: Components.ID,
         centerpt: ivec2,
     } = null,
 
     pub fn init(gpa: std.mem.Allocator) Board {
         return .{
             .gpa = gpa,
+            .components = .init(gpa),
             .wire_pads = .init(gpa),
             .wire_connections = .init(gpa),
         };
     }
     pub fn deinit(board: *Board) void {
-        board.components.deinit(board.gpa);
+        board.components.deinit();
         board.wire_pads.deinit();
         board.wire_connections.deinit();
     }
 
     pub fn format(board: *const Board, w: *std.Io.Writer) std.Io.Writer.Error!void {
         try w.writeAll("components:\n");
-        for (board.components.items) |component| {
+        for (board.components.list.items) |component_id| {
+            const component = board.components.mut(component_id).?;
             try w.print("- type: {s}\n", .{@tagName(component.tag)});
             try w.print("  pos: {d},{d},{d},{d}\n", .{ component.ul[0], component.ul[1], component.size[0], component.size[1] });
         }
     }
 
-    pub fn mutComponent(board: *Board, component: ComponentID) ?*Component {
-        return &board.components.items[@intFromEnum(component)];
-    }
-    pub fn addComponent(board: *Board, data: Component) !ComponentID {
-        if (board.components.items.len >= std.math.maxInt(u32)) return error.TooManyComponents;
-        try board.components.append(board.gpa, data);
-        return @enumFromInt(@as(u32, @intCast(board.components.items.len - 1)));
-    }
-
     pub fn onMouseOp(board: *Board, mpos: ivec2, op: enum { down, drag, hover, up }) void {
         switch (op) {
             .down => {
-                const component = board.addComponent(.{
+                const component = board.components.add(.{
                     .ul = mpos,
                     .size = ivec2{ 1, 1 },
                     .tag = .wire,
@@ -126,7 +121,7 @@ const Board = struct {
             },
             .drag, .up => {
                 if (board.placing_wire) |pwire| {
-                    const mut = board.mutComponent(pwire.component) orelse {
+                    const mut = board.components.mut(pwire.component) orelse {
                         // component del-eted while placing
                         board.placing_wire = null;
                         return;
@@ -163,8 +158,8 @@ const WirePad = struct {
     ul: ivec2,
 };
 const WireConnection = struct {
-    start_wire: ComponentID,
-    end_wire: ComponentID,
+    start_wire: Components.ID,
+    end_wire: Components.ID,
 };
 const Component = struct {
     ul: ivec2,

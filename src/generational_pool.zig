@@ -94,7 +94,7 @@ pub fn MemoryPoolExtra(comptime Item: type, comptime pool_options: MemoryPoolOpt
         }
 
         /// Creates a new item and adds it to the memory pool.
-        pub fn create(pool: *Pool) !struct { existing: bool, value: ItemPtr } {
+        pub fn create(pool: *Pool) !struct { bool, ItemPtr } {
             const node, const existing = if (pool.free_list) |item| blk: {
                 pool.free_list = item.next;
                 break :blk .{ item, true };
@@ -122,42 +122,56 @@ pub fn MemoryPoolExtra(comptime Item: type, comptime pool_options: MemoryPoolOpt
         }
     };
 }
-pub fn GenerationalPool(comptime T: type) type {
+pub fn GenerationalPool(comptime T: type, comptime cfg: struct {
+    keep_list: enum { no, unordered, ordered } = .no,
+}) type {
     return struct {
-        const keep_list = true;
+        const keep_list = cfg.keep_list;
         pool: MemoryPoolExtra(Val, .{}),
-        // unordered_list: if (keep_list) std.ArrayList(ID) else void,
+        list: if (keep_list != .no) std.ArrayList(ID) else void,
         pub const ID = struct { gen: u64, idx: *Val };
         const Val = struct { gen: u64, val: T };
         const Self = @This();
 
         pub fn init(gpa: std.mem.Allocator) Self {
-            return .{ .pool = .init(gpa) };
+            return .{ .pool = .init(gpa), .list = if (keep_list != .no) .init(gpa) };
         }
         pub fn deinit(self: *Self) void {
             self.pool.deinit();
+            if (keep_list != .no) self.list.deinit();
         }
 
         pub fn add(self: *Self, val: T) !ID {
-            const existing, const val_ptr = try self.pool.create(Val);
+            const existing, const val_ptr = try self.pool.create();
             if (!existing) val_ptr.gen = 0;
             val_ptr.* = .{
                 .gen = val_ptr.gen,
                 .val = val,
             };
-            // try self.unordered_list.append(ID);
+            const id: ID = .{ .gen = val_ptr.gen, .idx = val_ptr };
+            if (keep_list != .no) {
+                try self.list.append(id);
+            }
+            return id;
         }
         pub fn remove(self: *Self, id: ID) void {
             if (id.gen != id.idx.gen) return; // double-remove
             // id.idx = @ptrInvalidate(id.idx)
             self.pool.destroy(id.idx);
             id.idx.gen += 1;
-            // if(keep_list) {
-            // try self.unordered_list.swapRemove(idx);
-            // }
+            if (keep_list != .no) {
+                const idx = for (self.list.items, 0..) |it, i| {
+                    if (it.gen == id.gen and it.val == id.val) break i;
+                } else unreachable;
+                if (keep_list == .unordered) {
+                    try self.list.swapRemove(idx);
+                } else {
+                    try self.list.orderedRemove(idx);
+                }
+            }
         }
         /// the pointer is invalidated if the item is removed
-        pub fn mut(_: *Self, id: ID) ?*T {
+        pub fn mut(_: *const Self, id: ID) ?*T {
             if (id.gen != id.idx.gen) return null;
             return &id.idx.val;
         }
