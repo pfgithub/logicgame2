@@ -8,7 +8,12 @@ const PrintCtx = struct {
     cyclic: *Cyclic,
     w: *std.Io.Writer,
 };
+
 inline fn prettyPrintAnytype(obj: anytype, ctx: *const PrintCtx) error{WriteFailed}!void {
+    // so the goal here is to convert the typeInfo to a runtime typeInfo description and then do the printing
+    // at runtime based on the runtime description. that's doable but all code will be compiled even if you don't
+    // need eg float printing
+    // it's probably fine to do it comptime as long as struct printing isn't 'inline' so it can memoize
     switch (@typeInfo(@TypeOf(obj))) {
         .comptime_int, .int, .float => {
             try ctx.w.print("{d}", .{obj});
@@ -35,7 +40,7 @@ fn fmtAny(gpa: std.mem.Allocator, v: anytype) FmtAny(@TypeOf(v)) {
 
 test "fmtAny" {
     const gpa = std.testing.allocator;
-    try formattedSnapshot(gpa, "{f}", .{fmtAny(gpa, 25)}, @src(),
-        \\25
+    try formattedSnapshot(gpa, "{f}", .{fmtAny(gpa, .{ .x = 25 })}, @src(),
+        \\[todo struct]
     );
 }
