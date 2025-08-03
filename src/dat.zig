@@ -152,7 +152,11 @@ const Component = struct {
         wire,
         custom,
 
-        transistor_npn,
+        // transistor_npn,
+        not, // changed decision. let's do a not instead of a transistor
+        // why? transistor is a bit complicated & prevents you from creating something from nothing
+        // if you can't create something from nothing then we can't have you make a nor component unless we add an extra input
+        // so it's just unnecessary complication
         microled,
         buffer,
         wire_1,
