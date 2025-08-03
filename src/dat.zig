@@ -1,13 +1,11 @@
 const std = @import("std");
-const util = @import("snapshot.zig");
+const util = @import("util.zig");
 const GenerationalPool = @import("generational_pool.zig").GenerationalPool;
 
 const ivec2 = @Vector(2, i32);
 
 test "dat" {
-    var debug_allocator = std.heap.DebugAllocator(.{}).init;
-    defer std.debug.assert(debug_allocator.deinit() == .ok);
-    const gpa = debug_allocator.allocator();
+    const gpa = std.testing.allocator;
 
     var board: Board = .init(gpa);
     defer board.deinit();
