@@ -3,7 +3,7 @@ const util = @import("snapshot.zig");
 
 const ivec2 = @Vector(2, i32);
 
-test {
+test "dat" {
     var debug_allocator = std.heap.DebugAllocator(.{}).init;
     defer std.debug.assert(debug_allocator.deinit() == .ok);
     const gpa = debug_allocator.allocator();
@@ -20,6 +20,41 @@ test {
         \\components:
         \\- type: wire
         \\  pos: 5,7,1,1
+        \\
+    );
+    board.onMouseOp(.{ 6, 7 }, .drag);
+    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
+        \\components:
+        \\- type: wire
+        \\  pos: 5,7,2,1
+        \\
+    );
+    board.onMouseOp(.{ 6, 8 }, .drag);
+    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
+        \\components:
+        \\- type: wire
+        \\  pos: 5,7,1,2
+        \\
+    );
+    board.onMouseOp(.{ 5, 8 }, .drag);
+    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
+        \\components:
+        \\- type: wire
+        \\  pos: 5,7,1,2
+        \\
+    );
+    board.onMouseOp(.{ 5, 3 }, .drag);
+    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
+        \\components:
+        \\- type: wire
+        \\  pos: 5,3,1,5
+        \\
+    );
+    board.onMouseOp(.{ 3, 7 }, .drag);
+    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
+        \\components:
+        \\- type: wire
+        \\  pos: 3,7,3,1
         \\
     );
 }
