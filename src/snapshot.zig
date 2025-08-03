@@ -159,6 +159,8 @@ pub fn main() !u8 {
     const last_arg = args[args.len - 1];
     const middle_args = args[1 .. args.len - 1];
     var update_snapshots = false;
+    var spawn_args: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer spawn_args.deinit(gpa);
     for (middle_args) |arg| {
         if (std.mem.eql(u8, arg, "-u") or std.mem.eql(u8, arg, "--update-snapshots")) {
             update_snapshots = true;
@@ -166,8 +168,13 @@ pub fn main() !u8 {
             return error.BadArgs;
         }
     }
+    try spawn_args.append(gpa, last_arg);
 
-    var proc = std.process.Child.init(&.{last_arg}, gpa);
+    if (!update_snapshots) {
+        return std.process.execv(gpa, spawn_args.items);
+    }
+
+    var proc = std.process.Child.init(spawn_args.items, gpa);
     var env_map = try std.process.getEnvMap(gpa);
     defer env_map.deinit();
     var rd: [16]u8 = undefined;
@@ -179,7 +186,10 @@ pub fn main() !u8 {
     defer std.fs.cwd().deleteFile(path) catch {};
     try env_map.put("ZIG_ZNAPSHOT_FILE", path);
     proc.env_map = &env_map;
+
     const term = try proc.spawnAndWait();
+    if (term != .Exited or term.Exited != 0) return 1;
+
     const fcont = try std.fs.cwd().readFileAlloc(gpa, path, std.math.maxInt(usize));
     defer gpa.free(fcont);
     var rem = fcont;
@@ -269,7 +279,8 @@ pub fn main() !u8 {
     if (open_file_cont != null) {
         try finishAndWrite(&open_file_index, &open_file_cont, &open_file_new_cont, gpa, &open_file_uncommitted, &renderres, open_file_full_path);
     }
-    if (term != .Exited or term.Exited != 0) return 1;
+
+    std.log.info("{d} snapshots updated", .{sourcs.items.len});
 
     return 0;
 }
@@ -341,8 +352,11 @@ pub fn snapshot(actual: []const u8, src: std.builtin.SourceLocation, expected: ?
             return; // success (s'posedly)
         }
     }
-    const EMPTY_SNAPSHOT = "[empty_snapshot]";
-    try std.testing.expectEqualStrings(expected orelse if (std.mem.eql(u8, actual, EMPTY_SNAPSHOT)) EMPTY_SNAPSHOT ++ "_" else EMPTY_SNAPSHOT, actual);
+    if (expected == null or !std.mem.eql(u8, expected.?, actual)) {
+        std.log.err("use `-- -u` to update snapshots", .{});
+        const EMPTY_SNAPSHOT = "[empty_snapshot]";
+        try std.testing.expectEqualStrings(expected orelse if (std.mem.eql(u8, actual, EMPTY_SNAPSHOT)) EMPTY_SNAPSHOT ++ "_" else EMPTY_SNAPSHOT, actual);
+    }
 }
 
 /// unreviewed llm function:
