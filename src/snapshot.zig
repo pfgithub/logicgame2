@@ -148,6 +148,9 @@ fn xcodeSrc(
 }
 
 pub fn main() !u8 {
+    if (@import("builtin").target.os.tag == .windows) {
+        _ = std.os.windows.kernel32.SetConsoleOutputCP(65001);
+    }
     var debug_allocator = std.heap.DebugAllocator(.{}).init;
     defer std.debug.assert(debug_allocator.deinit() == .ok);
     const gpa = debug_allocator.allocator();
