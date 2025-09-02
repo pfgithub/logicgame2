@@ -128,7 +128,7 @@ pub fn GenerationalPool(comptime T: type, comptime cfg: struct {
     return struct {
         const keep_list = cfg.keep_list;
         pool: MemoryPoolExtra(Val, .{}),
-        list: if (keep_list != .no) std.ArrayList(ID) else void,
+        list: if (keep_list != .no) std.array_list.Managed(ID) else void,
         pub const ID = struct { gen: u64, idx: *Val };
         const Val = struct { gen: u64, val: T };
         const Self = @This();

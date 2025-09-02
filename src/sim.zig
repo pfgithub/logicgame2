@@ -24,7 +24,7 @@ const Parser = struct {
     active_component: ?ParserComponent = null,
     arena: std.mem.Allocator,
     has_errors: bool = false,
-    tests: std.ArrayListUnmanaged(ParserTest) = .empty,
+    tests: std.ArrayList(ParserTest) = .empty,
 
     const ParserCompleteComponent = struct {
         written: bool,
@@ -46,8 +46,8 @@ const Parser = struct {
         loc: Srcloc,
         name: []const u8,
         wire_states: std.StringArrayHashMapUnmanaged(Srcloc) = .empty,
-        instructions: std.ArrayListUnmanaged(SimulationInstruction) = .empty,
-        inputs: std.ArrayListUnmanaged(Wire) = .empty,
+        instructions: std.ArrayList(SimulationInstruction) = .empty,
+        inputs: std.ArrayList(Wire) = .empty,
         arena: std.mem.Allocator,
 
         fn getWireState(component: *ParserComponent, parser: *Parser, loc: Srcloc, label: []const u8, mode: enum { any, get, add }) !Wire {
@@ -136,9 +136,9 @@ const Parser = struct {
             if (parser.active_component != null and !std.mem.eql(u8, name, parser.active_component.?.name)) {
                 return parser.err(loc, "TEST in component must have same name", .{});
             }
-            var inputs = std.ArrayListUnmanaged(u64).empty;
-            var masks = std.ArrayListUnmanaged(u64).empty;
-            var outputs = std.ArrayListUnmanaged(u64).empty;
+            var inputs = std.ArrayList(u64).empty;
+            var masks = std.ArrayList(u64).empty;
+            var outputs = std.ArrayList(u64).empty;
             while (space_iter.next()) |item| {
                 if (std.mem.eql(u8, item, "->")) break;
                 try inputs.append(parser.arena, try parser.parseInt(loc, item));
@@ -164,7 +164,7 @@ const Parser = struct {
 
         if (std.mem.eql(u8, instruction, "OUTPUT")) {
             defer parser.active_component = null; // end component regardless of if we succeeded or not
-            var outputs = std.ArrayListUnmanaged(Wire).empty;
+            var outputs = std.ArrayList(Wire).empty;
             while (space_iter.next()) |item| {
                 try outputs.append(parser.arena, try component.getWireState(parser, loc, item, .get));
             }
@@ -191,8 +191,8 @@ const Parser = struct {
         } else if (std.mem.eql(u8, instruction, "CALL")) {
             const name = space_iter.next() orelse return parser.err(loc, "missing call name", .{});
 
-            var inputs = std.ArrayListUnmanaged(Wire).empty;
-            var outputs = std.ArrayListUnmanaged(Wire).empty;
+            var inputs = std.ArrayList(Wire).empty;
+            var outputs = std.ArrayList(Wire).empty;
             while (space_iter.next()) |item| {
                 if (std.mem.eql(u8, item, "->")) break;
                 try inputs.append(parser.arena, try component.getWireState(parser, loc, item, .get));
@@ -212,8 +212,8 @@ const Parser = struct {
             return;
         }
 
-        var inputs = std.ArrayListUnmanaged(Wire).empty;
-        var outputs = std.ArrayListUnmanaged(Wire).empty;
+        var inputs = std.ArrayList(Wire).empty;
+        var outputs = std.ArrayList(Wire).empty;
         while (space_iter.next()) |item| {
             if (std.mem.eql(u8, item, "->")) break;
             try inputs.append(parser.arena, try component.getWireState(parser, loc, item, .get));

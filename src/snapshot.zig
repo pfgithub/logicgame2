@@ -162,7 +162,7 @@ pub fn main() !u8 {
     const last_arg = args[args.len - 1];
     const middle_args = args[1 .. args.len - 1];
     var update_snapshots = false;
-    var spawn_args: std.ArrayListUnmanaged([]const u8) = .empty;
+    var spawn_args: std.ArrayList([]const u8) = .empty;
     defer spawn_args.deinit(gpa);
     for (middle_args) |arg| {
         if (std.mem.eql(u8, arg, "-u") or std.mem.eql(u8, arg, "--update-snapshots")) {
@@ -203,7 +203,7 @@ pub fn main() !u8 {
     const fcont = try std.fs.cwd().readFileAlloc(gpa, path, std.math.maxInt(usize));
     defer gpa.free(fcont);
     var rem = fcont;
-    var sourcs = std.ArrayList(Src).init(gpa);
+    var sourcs = std.array_list.Managed(Src).init(gpa);
     defer sourcs.deinit();
     while (rem.len > 0) {
         var res: Src = undefined;
@@ -216,9 +216,9 @@ pub fn main() !u8 {
     defer if (open_file_cont) |of| gpa.free(of);
     var open_file_full_path: ?[]const u8 = null;
     defer if (open_file_full_path) |offp| gpa.free(offp);
-    var open_file_new_cont = std.ArrayListUnmanaged(u8).empty;
+    var open_file_new_cont = std.ArrayList(u8).empty;
     defer open_file_new_cont.deinit(gpa);
-    var renderres = std.ArrayListUnmanaged(u8).empty;
+    var renderres = std.ArrayList(u8).empty;
     defer renderres.deinit(gpa);
     var open_file_module: ?[]const u8 = null;
     var open_file_path: ?[]const u8 = null;
@@ -310,11 +310,11 @@ pub fn main() !u8 {
     if (term != .Exited) return 1;
     return term.Exited;
 }
-fn commitRem(open_file_new_cont: *std.ArrayListUnmanaged(u8), gpa: std.mem.Allocator, open_file_cont: ?[]const u8, open_file_uncommitted: *usize, open_file_index: usize) !void {
+fn commitRem(open_file_new_cont: *std.ArrayList(u8), gpa: std.mem.Allocator, open_file_cont: ?[]const u8, open_file_uncommitted: *usize, open_file_index: usize) !void {
     try open_file_new_cont.appendSlice(gpa, open_file_cont.?[open_file_uncommitted.*..open_file_index]);
     open_file_uncommitted.* = open_file_index;
 }
-fn finishAndWrite(open_file_index: *usize, open_file_cont: *?[]const u8, open_file_new_cont: *std.ArrayListUnmanaged(u8), gpa: std.mem.Allocator, open_file_uncommitted: *usize, renderres: *std.ArrayListUnmanaged(u8), open_file_full_path: ?[]const u8) !void {
+fn finishAndWrite(open_file_index: *usize, open_file_cont: *?[]const u8, open_file_new_cont: *std.ArrayList(u8), gpa: std.mem.Allocator, open_file_uncommitted: *usize, renderres: *std.ArrayList(u8), open_file_full_path: ?[]const u8) !void {
     // commit and write
     open_file_index.* = open_file_cont.*.?.len;
     try commitRem(open_file_new_cont, gpa, open_file_cont.*, open_file_uncommitted, open_file_index.*);
@@ -323,12 +323,14 @@ fn finishAndWrite(open_file_index: *usize, open_file_cont: *?[]const u8, open_fi
     defer tree.deinit(gpa);
     if (tree.errors.len != 0) return error.UpdErr;
     renderres.clearRetainingCapacity();
-    var writer = renderres.writer(gpa);
-    var writerNew = writer.adaptToNewApi();
-    try tree.render(gpa, &writerNew.new_interface, .{});
-    try std.fs.cwd().writeFile(.{ .sub_path = open_file_full_path.?, .data = renderres.items });
-    gpa.free(open_file_cont.*.?);
-    open_file_cont.* = null;
+    {
+        var writer = std.io.Writer.Allocating.fromArrayList(gpa, open_file_new_cont);
+        defer open_file_new_cont.* = writer.toArrayList();
+        try tree.render(gpa, &writer.writer, .{});
+        try std.fs.cwd().writeFile(.{ .sub_path = open_file_full_path.?, .data = renderres.items });
+        gpa.free(open_file_cont.*.?);
+        open_file_cont.* = null;
+    }
 }
 
 fn getSnapfile() ?[]const u8 {
@@ -345,7 +347,7 @@ fn getSnapfile() ?[]const u8 {
 }
 
 pub fn formattedSnapshot(gpa: std.mem.Allocator, comptime fmt: []const u8, args: anytype, src: std.builtin.SourceLocation, expected: ?[]const u8) !void {
-    var buf = std.ArrayList(u8).init(gpa);
+    var buf = std.array_list.Managed(u8).init(gpa);
     defer buf.deinit();
     try buf.writer().print(fmt, args);
     try snapshot(buf.items, src, expected);
