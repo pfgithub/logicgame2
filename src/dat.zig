@@ -64,7 +64,21 @@ test "dat" {
         \\- wire_1: 5,7 -> 2,7
         \\
     );
+
+    board.onPlaceComponent(.{ 1, 4 }, .{ .id = .not, .size = .{ 1, 3 } });
+    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(), null);
 }
+
+const ComponentData = struct {
+    id: ComponentHash, // content-addressable hash? or just id
+    size: @Vector(2, i32),
+};
+const ComponentHash = enum(u128) {
+    none = 0,
+    not = 1,
+    microled = 2,
+    buffer = 3,
+};
 
 const Wires = GenerationalPool(Wire, .{ .keep_list = .unordered });
 const Components = GenerationalPool(Component, .{ .keep_list = .unordered });
@@ -108,8 +122,8 @@ const Board = struct {
         try w.writeAll("components:\n");
         for (board.components.list.items) |component_id| {
             const component = board.components.mut(component_id).?;
-            try w.print("- type: {s}\n", .{@tagName(component.tag)});
-            try w.print("  pos: {d},{d},{d},{d}\n", .{ component.ul[0], component.ul[1], component.size[0], component.size[1] });
+            try w.print("- type: {s}\n", .{@tagName(component.data.id)});
+            try w.print("  pos: {d},{d},{d},{d}\n", .{ component.ul[0], component.ul[1], component.data.size[0], component.data.size[1] });
         }
         try w.writeAll("wires:\n");
         for (board.wires.list.items) |wire_id| {
@@ -123,6 +137,14 @@ const Board = struct {
                 wire.to[1],
             });
         }
+    }
+
+    pub fn onPlaceComponent(board: *Board, cpos: ivec2, cdata: ComponentData) void {
+        _ = board.components.add(.{
+            .ul = cpos,
+            .data = cdata,
+            .active = true,
+        }) catch return;
     }
 
     pub fn onMouseOp(board: *Board, mpos: ivec2, op: enum { down, drag, hover, up }) void {
@@ -182,19 +204,8 @@ const Wire = struct {
 };
 const Component = struct {
     ul: ivec2,
-    size: ivec2,
-    tag: enum {
-        wire,
-        custom,
-
-        // transistor_npn,
-        not, // changed decision. let's do a not instead of a transistor
-        // why? transistor is a bit complicated & prevents you from creating something from nothing
-        // if you can't create something from nothing then we can't have you make a nor component unless we add an extra input
-        // so it's just unnecessary complication
-        microled,
-        buffer,
-    },
+    data: ComponentData,
+    active: bool,
 };
 
 // wire design selection:
