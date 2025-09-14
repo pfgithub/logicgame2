@@ -323,14 +323,15 @@ fn finishAndWrite(open_file_index: *usize, open_file_cont: *?[]const u8, open_fi
     defer tree.deinit(gpa);
     if (tree.errors.len != 0) return error.UpdErr;
     renderres.clearRetainingCapacity();
+
     {
-        var writer = std.io.Writer.Allocating.fromArrayList(gpa, open_file_new_cont);
-        defer open_file_new_cont.* = writer.toArrayList();
+        var writer = std.io.Writer.Allocating.fromArrayList(gpa, renderres);
+        defer renderres.* = writer.toArrayList();
         try tree.render(gpa, &writer.writer, .{});
-        try std.fs.cwd().writeFile(.{ .sub_path = open_file_full_path.?, .data = renderres.items });
-        gpa.free(open_file_cont.*.?);
-        open_file_cont.* = null;
     }
+    try std.fs.cwd().writeFile(.{ .sub_path = open_file_full_path.?, .data = renderres.items });
+    gpa.free(open_file_cont.*.?);
+    open_file_cont.* = null;
 }
 
 fn getSnapfile() ?[]const u8 {
