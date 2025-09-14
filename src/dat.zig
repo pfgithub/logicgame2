@@ -66,7 +66,14 @@ test "dat" {
     );
 
     board.onPlaceComponent(.{ 1, 4 }, .{ .id = .not, .size = .{ 1, 3 } });
-    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(), null);
+    try util.formattedSnapshot(gpa, "{f}", .{board}, @src(),
+        \\components:
+        \\- type: not
+        \\  pos: 1,4,1,3
+        \\wires:
+        \\- wire_1: 5,7 -> 2,7
+        \\
+    );
 }
 
 const ComponentData = struct {
